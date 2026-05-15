@@ -1,0 +1,41 @@
+[package]
+name = "ag-ui-client"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Client SDK for the AG-UI protocol"
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+ag-ui-core = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+async-trait = { workspace = true }
+futures = { workspace = true }
+futures-util = { workspace = true }
+async-stream = { workspace = true }
+tokio = { workspace = true }
+tokio-stream = { workspace = true }
+pin-project-lite = { workspace = true }
+bytes = { workspace = true }
+reqwest = { workspace = true }
+eventsource-stream = { workspace = true }
+json-patch = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "time"] }
+tokio-test = { workspace = true }
+
+[[example]]
+name = "basic_agent"
+path = "examples/basic_agent.rs"
+
+[[example]]
+name = "streaming_client"
+path = "examples/streaming_client.rs"

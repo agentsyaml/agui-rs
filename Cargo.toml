@@ -1,0 +1,69 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/ag-ui-core",
+    "crates/ag-ui-encoder",
+    "crates/ag-ui-client",
+    "crates/ag-ui-server",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+license = "MIT"
+repository = "https://github.com/your-org/ag-ui-rust"
+homepage = "https://docs.ag-ui.com"
+description = "Rust SDK for the AG-UI (Agent-User Interaction) protocol"
+keywords = ["ag-ui", "agent", "ai", "sse", "streaming"]
+categories = ["api-bindings", "asynchronous"]
+
+[workspace.dependencies]
+# Internal crates (path-resolved within workspace)
+ag-ui-core = { path = "crates/ag-ui-core", version = "0.1.0" }
+ag-ui-encoder = { path = "crates/ag-ui-encoder", version = "0.1.0" }
+ag-ui-client = { path = "crates/ag-ui-client", version = "0.1.0" }
+ag-ui-server = { path = "crates/ag-ui-server", version = "0.1.0" }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Async runtime / streams
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync"] }
+futures = "0.3"
+futures-util = "0.3"
+async-trait = "0.1"
+async-stream = "0.3"
+tokio-stream = "0.1"
+pin-project-lite = "0.2"
+bytes = "1"
+
+# HTTP / SSE
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
+eventsource-stream = "0.2"
+
+# Server
+axum = "0.7"
+tower = "0.5"
+http = "1"
+
+# JSON Patch (RFC 6902) for STATE_DELTA / ACTIVITY_DELTA
+json-patch = "2"
+
+# Errors / logging
+thiserror = "1"
+tracing = "0.1"
+
+# Utilities
+uuid = { version = "1", features = ["v4", "serde"] }
+
+# Dev
+tokio-test = "0.4"
+
+[profile.dev]
+opt-level = 0
+
+[profile.release]
+opt-level = 3
+lto = "thin"
