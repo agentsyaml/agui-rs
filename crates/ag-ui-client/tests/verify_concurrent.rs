@@ -10,7 +10,10 @@ async fn collect(events: Vec<Event>) -> Vec<Result<Event>> {
 fn assert_validation(result: &Result<Event>, expected: &str) {
     match result {
         Err(AgUiError::Validation(message)) => {
-            assert!(message.contains(expected), "expected '{expected}' in '{message}'");
+            assert!(
+                message.contains(expected),
+                "expected '{expected}' in '{message}'"
+            );
         }
         other => panic!("expected validation error, got {other:?}"),
     }
@@ -39,7 +42,10 @@ async fn concurrent_tool_calls_are_rejected_by_single_active_tool_call_model() {
     .await;
 
     assert_eq!(out.len(), 3);
-    assert_validation(&out[2], "Cannot send 'TOOL_CALL_START' event: A tool call with ID 'tool1' is already in progress");
+    assert_validation(
+        &out[2],
+        "Cannot send 'TOOL_CALL_START' event: A tool call with ID 'tool1' is already in progress",
+    );
 }
 
 #[tokio::test]
@@ -118,7 +124,10 @@ async fn duplicate_tool_call_id_start_errors() {
     ])
     .await;
 
-    assert_validation(&out[2], "Cannot send 'TOOL_CALL_START' event: A tool call with ID 'tool1' is already in progress");
+    assert_validation(
+        &out[2],
+        "Cannot send 'TOOL_CALL_START' event: A tool call with ID 'tool1' is already in progress",
+    );
 }
 
 #[tokio::test]
@@ -140,7 +149,10 @@ async fn args_for_nonexistent_tool_call_id_errors() {
     ])
     .await;
 
-    assert_validation(&out[1], "Cannot send 'TOOL_CALL_ARGS' event: No active tool call found with ID 'nonexistent'");
+    assert_validation(
+        &out[1],
+        "Cannot send 'TOOL_CALL_ARGS' event: No active tool call found with ID 'nonexistent'",
+    );
 }
 
 #[tokio::test]
@@ -152,7 +164,10 @@ async fn run_finished_while_text_message_is_active_errors() {
     ])
     .await;
 
-    assert_validation(&out[2], "Cannot send 'RUN_FINISHED' while text message 'msg1' is still active");
+    assert_validation(
+        &out[2],
+        "Cannot send 'RUN_FINISHED' while text message 'msg1' is still active",
+    );
 }
 
 #[tokio::test]
@@ -164,7 +179,10 @@ async fn run_finished_while_tool_call_is_active_errors() {
     ])
     .await;
 
-    assert_validation(&out[2], "Cannot send 'RUN_FINISHED' while tool call 'tool1' is still active");
+    assert_validation(
+        &out[2],
+        "Cannot send 'RUN_FINISHED' while tool call 'tool1' is still active",
+    );
 }
 
 #[tokio::test]

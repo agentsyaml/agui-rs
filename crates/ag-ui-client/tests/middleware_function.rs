@@ -1,20 +1,22 @@
 #![allow(dead_code)]
 #![allow(unused_imports)]
 
+#[path = "../src/agent.rs"]
+mod agent;
 #[path = "../src/apply.rs"]
 mod apply;
 #[path = "../src/chunks.rs"]
 mod chunks;
+#[path = "../src/middleware.rs"]
+mod middleware;
 #[path = "../src/subscriber.rs"]
 mod subscriber;
 #[path = "../src/verify.rs"]
 mod verify;
-#[path = "../src/middleware.rs"]
-mod middleware;
-#[path = "../src/agent.rs"]
-mod agent;
 
-use ag_ui_core::{factory, BaseEventFields, Event, RunFinishedEvent, RunFinishedOutcome, RunAgentInput};
+use ag_ui_core::{
+    factory, BaseEventFields, Event, RunAgentInput, RunFinishedEvent, RunFinishedOutcome,
+};
 use async_stream::try_stream;
 use async_trait::async_trait;
 use futures::{stream, StreamExt};
@@ -30,15 +32,19 @@ struct FakeAgent {
 #[async_trait]
 impl agent::Agent for FakeAgent {
     async fn run(&self, _input: RunAgentInput) -> ag_ui_core::Result<agent::EventStream> {
-        Ok(Box::pin(stream::iter(self.events.clone().into_iter().map(Ok))))
+        Ok(Box::pin(stream::iter(
+            self.events.clone().into_iter().map(Ok),
+        )))
     }
 }
 
 type MiddlewareFn = dyn Fn(
         middleware::MiddlewareInput,
         middleware::NextFn,
-    ) -> futures::future::BoxFuture<'static, std::result::Result<middleware::EventStream, ag_ui_core::AgUiError>>
-    + Send
+    ) -> futures::future::BoxFuture<
+        'static,
+        std::result::Result<middleware::EventStream, ag_ui_core::AgUiError>,
+    > + Send
     + Sync;
 
 struct FunctionMiddleware {
@@ -116,7 +122,10 @@ async fn function_based_middleware_can_intercept_events() {
     assert_eq!(events.len(), 2);
     match &events[0] {
         Event::RunStarted(started) => {
-            assert_eq!(started.base.raw_event, Some(json!({"fromMiddleware": true})));
+            assert_eq!(
+                started.base.raw_event,
+                Some(json!({"fromMiddleware": true}))
+            );
         }
         other => panic!("expected run started event, got {other:?}"),
     }

@@ -11,7 +11,10 @@ async fn collect(events: Vec<Event>) -> Vec<Result<Event>> {
 fn assert_validation(result: &Result<Event>, expected: &str) {
     match result {
         Err(AgUiError::Validation(message)) => {
-            assert!(message.contains(expected), "expected '{expected}' in '{message}'");
+            assert!(
+                message.contains(expected),
+                "expected '{expected}' in '{message}'"
+            );
         }
         other => panic!("expected validation error, got {other:?}"),
     }
@@ -58,7 +61,10 @@ async fn text_message_content_before_start_errors() {
     .await;
 
     assert!(out[0].is_ok());
-    assert_validation(&out[1], "Cannot send 'TEXT_MESSAGE_CONTENT' event: No active text message found with ID 'm1'");
+    assert_validation(
+        &out[1],
+        "Cannot send 'TEXT_MESSAGE_CONTENT' event: No active text message found with ID 'm1'",
+    );
 }
 
 #[tokio::test]
@@ -70,7 +76,10 @@ async fn text_message_end_before_start_errors() {
     .await;
 
     assert!(out[0].is_ok());
-    assert_validation(&out[1], "Cannot send 'TEXT_MESSAGE_END' event: No active text message found with ID 'm1'");
+    assert_validation(
+        &out[1],
+        "Cannot send 'TEXT_MESSAGE_END' event: No active text message found with ID 'm1'",
+    );
 }
 
 #[tokio::test]
@@ -94,7 +103,10 @@ async fn second_text_message_start_while_active_errors() {
 
     assert!(out[0].is_ok());
     assert!(out[1].is_ok());
-    assert_validation(&out[2], "A text message with ID 'm1' is already in progress");
+    assert_validation(
+        &out[2],
+        "A text message with ID 'm1' is already in progress",
+    );
 }
 
 #[tokio::test]
@@ -106,7 +118,10 @@ async fn mismatched_text_message_content_id_errors() {
     ])
     .await;
 
-    assert_validation(&out[2], "Cannot send 'TEXT_MESSAGE_CONTENT' event: No active text message found with ID 'm2'");
+    assert_validation(
+        &out[2],
+        "Cannot send 'TEXT_MESSAGE_CONTENT' event: No active text message found with ID 'm2'",
+    );
 }
 
 #[tokio::test]
@@ -118,7 +133,9 @@ async fn text_message_content_with_raw_custom_state_and_messages_snapshot_passes
         raw_event(),
         custom_event(),
         factory::state_snapshot(json!({})),
-        factory::state_delta(vec![json!({ "op": "add", "path": "/result", "value": "success" })]),
+        factory::state_delta(vec![
+            json!({ "op": "add", "path": "/result", "value": "success" }),
+        ]),
         messages_snapshot_event(),
         factory::text_message_end("m1"),
         factory::run_finished("thread", "run"),
@@ -215,5 +232,8 @@ async fn run_finished_with_active_text_message_errors() {
     ])
     .await;
 
-    assert_validation(&out[2], "Cannot send 'RUN_FINISHED' while text message 'm1' is still active");
+    assert_validation(
+        &out[2],
+        "Cannot send 'RUN_FINISHED' while text message 'm1' is still active",
+    );
 }

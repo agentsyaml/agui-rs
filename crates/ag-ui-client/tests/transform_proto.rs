@@ -1,4 +1,4 @@
-use ag_ui_client::{Agent, AgentConfig, AgUiError, HttpAgent, HttpAgentConfig, RunAgentInput};
+use ag_ui_client::{AgUiError, Agent, AgentConfig, HttpAgent, HttpAgentConfig, RunAgentInput};
 use futures::StreamExt;
 use std::collections::HashMap;
 use std::io::{Read, Write};

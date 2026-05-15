@@ -1,20 +1,23 @@
 #![allow(dead_code)]
 #![allow(unused_imports)]
 
+#[path = "../src/agent.rs"]
+mod agent;
 #[path = "../src/apply.rs"]
 mod apply;
 #[path = "../src/chunks.rs"]
 mod chunks;
+#[path = "../src/middleware.rs"]
+mod middleware;
 #[path = "../src/subscriber.rs"]
 mod subscriber;
 #[path = "../src/verify.rs"]
 mod verify;
-#[path = "../src/middleware.rs"]
-mod middleware;
-#[path = "../src/agent.rs"]
-mod agent;
 
-use ag_ui_core::{BaseEventFields, Event, Message, RunAgentInput, RunFinishedEvent, TextMessageChunkEvent, TextMessageRole};
+use ag_ui_core::{
+    BaseEventFields, Event, Message, RunAgentInput, RunFinishedEvent, TextMessageChunkEvent,
+    TextMessageRole,
+};
 use async_trait::async_trait;
 use futures::{stream, StreamExt};
 use std::sync::{Arc, Mutex};
@@ -28,8 +31,13 @@ struct FakeAgent {
 #[async_trait]
 impl agent::Agent for FakeAgent {
     async fn run(&self, input: RunAgentInput) -> ag_ui_core::Result<agent::EventStream> {
-        self.seen_inputs.lock().expect("seen inputs lock").push(input);
-        Ok(Box::pin(stream::iter(self.events.clone().into_iter().map(Ok))))
+        self.seen_inputs
+            .lock()
+            .expect("seen inputs lock")
+            .push(input);
+        Ok(Box::pin(stream::iter(
+            self.events.clone().into_iter().map(Ok),
+        )))
     }
 }
 
@@ -60,7 +68,10 @@ impl middleware::Middleware for CapturingMiddleware {
             *self.captured.lock().expect("captured lock") = last.messages.clone();
         }
 
-        let events = applied.into_iter().map(|applied| Ok(applied.event)).collect::<Vec<_>>();
+        let events = applied
+            .into_iter()
+            .map(|applied| Ok(applied.event))
+            .collect::<Vec<_>>();
         Ok(Box::pin(stream::iter(events)))
     }
 }
@@ -100,7 +111,8 @@ async fn outer_and_inner_state_tracking_middlewares_both_capture_messages() {
         captured: Arc::clone(&inner_captured),
     });
 
-    let mut runner = agent::AgentRunner::new(agent, agent::AgentConfig::default()).with_middleware(chain);
+    let mut runner =
+        agent::AgentRunner::new(agent, agent::AgentConfig::default()).with_middleware(chain);
     let result = runner
         .run_agent(agent::RunAgentParameters {
             run_id: Some("test-run".into()),

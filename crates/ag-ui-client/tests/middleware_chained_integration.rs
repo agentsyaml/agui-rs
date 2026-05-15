@@ -1,25 +1,25 @@
 #![allow(dead_code)]
 #![allow(unused_imports)]
 
+#[path = "../src/agent.rs"]
+mod agent;
 #[path = "../src/apply.rs"]
 mod apply;
 #[path = "../src/chunks.rs"]
 mod chunks;
+#[path = "../src/middleware.rs"]
+mod middleware;
 #[path = "../src/subscriber.rs"]
 mod subscriber;
 #[path = "../src/verify.rs"]
 mod verify;
-#[path = "../src/middleware.rs"]
-mod middleware;
-#[path = "../src/agent.rs"]
-mod agent;
 
 use ag_ui_core::types::{AssistantMessage, UserMessage};
 use ag_ui_core::{
-    factory, BaseEventFields, Event, Message, RunAgentInput, StateDeltaEvent,
-    StateSnapshotEvent, TextMessageChunkEvent, TextMessageContentEvent, TextMessageEndEvent,
-    TextMessageRole, TextMessageStartEvent, ToolCallArgsEvent, ToolCallChunkEvent,
-    ToolCallEndEvent, ToolCallResultEvent, ToolCallStartEvent, ToolResultRole, UserMessageContent,
+    factory, BaseEventFields, Event, Message, RunAgentInput, StateDeltaEvent, StateSnapshotEvent,
+    TextMessageChunkEvent, TextMessageContentEvent, TextMessageEndEvent, TextMessageRole,
+    TextMessageStartEvent, ToolCallArgsEvent, ToolCallChunkEvent, ToolCallEndEvent,
+    ToolCallResultEvent, ToolCallStartEvent, ToolResultRole, UserMessageContent,
 };
 use async_stream::try_stream;
 use async_trait::async_trait;
@@ -42,7 +42,9 @@ struct FakeAgent {
 #[async_trait]
 impl agent::Agent for FakeAgent {
     async fn run(&self, _input: RunAgentInput) -> ag_ui_core::Result<agent::EventStream> {
-        Ok(Box::pin(stream::iter(self.events.clone().into_iter().map(Ok))))
+        Ok(Box::pin(stream::iter(
+            self.events.clone().into_iter().map(Ok),
+        )))
     }
 }
 
@@ -81,12 +83,18 @@ impl middleware::Middleware for CapturingMiddleware {
             .collect();
 
         if let Some(last) = applied.last() {
-            *self.captured_messages.lock().expect("captured messages lock") = last.messages.clone();
+            *self
+                .captured_messages
+                .lock()
+                .expect("captured messages lock") = last.messages.clone();
             *self.captured_state.lock().expect("captured state lock") = last.state.clone();
         }
 
         Ok(Box::pin(stream::iter(
-            applied.into_iter().map(|applied| Ok(applied.event)).collect::<Vec<_>>(),
+            applied
+                .into_iter()
+                .map(|applied| Ok(applied.event))
+                .collect::<Vec<_>>(),
         )))
     }
 }
@@ -395,7 +403,9 @@ async fn two_capturing_middlewares_track_text_chunk_messages() {
         let captured = captured.lock().expect("messages lock");
         assert_eq!(captured.len(), 1);
         match &captured[0] {
-            Message::Assistant(message) => assert_eq!(message.content.as_deref(), Some("Hello from agent")),
+            Message::Assistant(message) => {
+                assert_eq!(message.content.as_deref(), Some("Hello from agent"))
+            }
             other => panic!("expected assistant message, got {other:?}"),
         }
     }
@@ -417,7 +427,9 @@ async fn three_capturing_middlewares_track_text_chunk_messages() {
         let captured = captured.lock().expect("messages lock");
         assert_eq!(captured.len(), 1);
         match &captured[0] {
-            Message::Assistant(message) => assert_eq!(message.content.as_deref(), Some("Hello from agent")),
+            Message::Assistant(message) => {
+                assert_eq!(message.content.as_deref(), Some("Hello from agent"))
+            }
             other => panic!("expected assistant message, got {other:?}"),
         }
     }
@@ -436,7 +448,9 @@ async fn chained_middlewares_track_full_text_events() {
     for captured in [&outer_messages, &inner_messages] {
         let captured = captured.lock().expect("messages lock");
         match &captured[0] {
-            Message::Assistant(message) => assert_eq!(message.content.as_deref(), Some("Full text")),
+            Message::Assistant(message) => {
+                assert_eq!(message.content.as_deref(), Some("Full text"))
+            }
             other => panic!("expected assistant message, got {other:?}"),
         }
     }
@@ -478,7 +492,12 @@ async fn chained_middlewares_track_full_tool_call_events() {
     chain.push(outer);
     chain.push(inner);
 
-    run_agent_with(full_tool_call_events(), chain, agent::AgentConfig::default()).await;
+    run_agent_with(
+        full_tool_call_events(),
+        chain,
+        agent::AgentConfig::default(),
+    )
+    .await;
 
     for captured in [&outer_messages, &inner_messages] {
         let captured = captured.lock().expect("messages lock");
@@ -502,10 +521,21 @@ async fn chained_middlewares_propagate_state_snapshot_and_delta() {
     chain.push(outer);
     chain.push(inner);
 
-    run_agent_with(text_and_state_events(), chain, agent::AgentConfig::default()).await;
+    run_agent_with(
+        text_and_state_events(),
+        chain,
+        agent::AgentConfig::default(),
+    )
+    .await;
 
-    assert_eq!(*outer_state.lock().expect("outer state lock"), json!({"temperature": 75}));
-    assert_eq!(*inner_state.lock().expect("inner state lock"), json!({"temperature": 75}));
+    assert_eq!(
+        *outer_state.lock().expect("outer state lock"),
+        json!({"temperature": 75})
+    );
+    assert_eq!(
+        *inner_state.lock().expect("inner state lock"),
+        json!({"temperature": 75})
+    );
     assert_eq!(outer_messages.lock().expect("outer messages lock").len(), 1);
     assert_eq!(inner_messages.lock().expect("inner messages lock").len(), 1);
 }
@@ -516,7 +546,12 @@ async fn state_evolves_incrementally_across_events() {
     let mut chain = middleware::MiddlewareChain::new();
     chain.push(capturing);
 
-    run_agent_with(text_and_state_events(), chain, agent::AgentConfig::default()).await;
+    run_agent_with(
+        text_and_state_events(),
+        chain,
+        agent::AgentConfig::default(),
+    )
+    .await;
 
     let captured = captured_events.lock().expect("events lock");
     let snapshot = captured
@@ -540,7 +575,12 @@ async fn messages_snapshot_replaces_messages_for_all_layers() {
     chain.push(outer);
     chain.push(inner);
 
-    run_agent_with(messages_snapshot_events(), chain, agent::AgentConfig::default()).await;
+    run_agent_with(
+        messages_snapshot_events(),
+        chain,
+        agent::AgentConfig::default(),
+    )
+    .await;
 
     for captured in [&outer_messages, &inner_messages] {
         let captured = captured.lock().expect("messages lock");
@@ -576,11 +616,19 @@ async fn mixed_text_and_tool_call_events_attach_tool_call_to_existing_message() 
     chain.push(outer);
     chain.push(inner);
 
-    run_agent_with(text_then_tool_events(), chain, agent::AgentConfig::default()).await;
+    run_agent_with(
+        text_then_tool_events(),
+        chain,
+        agent::AgentConfig::default(),
+    )
+    .await;
 
     for captured in [&outer_messages, &inner_messages] {
         let captured = captured.lock().expect("messages lock");
-        let first = captured.iter().find(|message| message.id() == "msg-1").expect("assistant msg");
+        let first = captured
+            .iter()
+            .find(|message| message.id() == "msg-1")
+            .expect("assistant msg");
         match first {
             Message::Assistant(message) => {
                 assert_eq!(message.content.as_deref(), Some("Let me search"));
@@ -589,7 +637,10 @@ async fn mixed_text_and_tool_call_events_attach_tool_call_to_existing_message() 
             }
             other => panic!("expected assistant message, got {other:?}"),
         }
-        let tool = captured.iter().find(|message| matches!(message, Message::Tool(_))).expect("tool msg");
+        let tool = captured
+            .iter()
+            .find(|message| matches!(message, Message::Tool(_)))
+            .expect("tool msg");
         match tool {
             Message::Tool(message) => assert_eq!(message.content, "found it"),
             other => panic!("expected tool message, got {other:?}"),
@@ -635,7 +686,10 @@ async fn event_injecting_middleware_exposes_injected_state_downstream() {
     chain.push(EventInjectingMiddleware);
 
     run_agent_with(text_chunk_events(), chain, agent::AgentConfig::default()).await;
-    assert_eq!(*captured_state.lock().expect("state lock"), json!({"injected": true}));
+    assert_eq!(
+        *captured_state.lock().expect("state lock"),
+        json!({"injected": true})
+    );
     assert_eq!(captured_messages.lock().expect("messages lock").len(), 1);
 }
 
@@ -680,7 +734,10 @@ async fn initial_state_is_preserved_without_state_events() {
     };
 
     run_agent_with(text_chunk_events(), chain, config).await;
-    assert_eq!(*captured_state.lock().expect("state lock"), json!({"preserved": true}));
+    assert_eq!(
+        *captured_state.lock().expect("state lock"),
+        json!({"preserved": true})
+    );
 }
 
 #[tokio::test]
@@ -725,7 +782,12 @@ async fn tool_call_messages_build_incrementally_across_events() {
     let mut chain = middleware::MiddlewareChain::new();
     chain.push(capturing);
 
-    run_agent_with(full_tool_call_events(), chain, agent::AgentConfig::default()).await;
+    run_agent_with(
+        full_tool_call_events(),
+        chain,
+        agent::AgentConfig::default(),
+    )
+    .await;
 
     let captured = captured_events.lock().expect("events lock");
     let at_start = captured

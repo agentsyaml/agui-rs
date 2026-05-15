@@ -11,7 +11,10 @@ async fn collect(events: Vec<Event>) -> Vec<Result<Event, AgUiError>> {
 fn assert_validation(result: &Result<Event, AgUiError>, expected: &str) {
     match result {
         Err(AgUiError::Validation(message)) => {
-            assert!(message.contains(expected), "expected '{expected}' in '{message}'");
+            assert!(
+                message.contains(expected),
+                "expected '{expected}' in '{message}'"
+            );
         }
         other => panic!("expected validation error, got {other:?}"),
     }
@@ -61,7 +64,10 @@ async fn rejects_duplicate_active_step_names() {
 
     assert_eq!(out.len(), 3);
     assert!(out[..2].iter().all(Result::is_ok));
-    assert_validation(&out[2], "Step \"test-step\" is already active for 'STEP_STARTED'");
+    assert_validation(
+        &out[2],
+        "Step \"test-step\" is already active for 'STEP_STARTED'",
+    );
 }
 
 #[tokio::test]

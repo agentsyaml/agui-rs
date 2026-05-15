@@ -147,7 +147,9 @@ fn expand_text_chunk(
     let mut events = Vec::new();
 
     if open_tool.is_some() {
-        let tool = open_tool.take().ok_or_else(|| ag_ui_core::AgUiError::protocol("tool call state missing"))?;
+        let tool = open_tool
+            .take()
+            .ok_or_else(|| ag_ui_core::AgUiError::protocol("tool call state missing"))?;
         events.push(Event::ToolCallEnd(ToolCallEndEvent {
             tool_call_id: tool.tool_call_id,
             base: BaseEventFields::default(),
@@ -173,7 +175,9 @@ fn expand_text_chunk(
     };
 
     if should_switch_message {
-        let current = open_text.take().ok_or_else(|| ag_ui_core::AgUiError::protocol("text message state missing"))?;
+        let current = open_text
+            .take()
+            .ok_or_else(|| ag_ui_core::AgUiError::protocol("text message state missing"))?;
         events.push(Event::TextMessageEnd(TextMessageEndEvent {
             message_id: current.message_id,
             base: BaseEventFields::default(),
@@ -198,7 +202,11 @@ fn expand_text_chunk(
         let message_id = open_text
             .as_ref()
             .map(|open| open.message_id.clone())
-            .ok_or_else(|| ag_ui_core::AgUiError::validation("first TEXT_MESSAGE_CHUNK must include message_id"))?;
+            .ok_or_else(|| {
+                ag_ui_core::AgUiError::validation(
+                    "first TEXT_MESSAGE_CHUNK must include message_id",
+                )
+            })?;
         events.push(Event::TextMessageContent(TextMessageContentEvent {
             message_id,
             delta,
@@ -218,7 +226,9 @@ fn expand_tool_chunk(
     let mut events = Vec::new();
 
     if open_text.is_some() {
-        let text = open_text.take().ok_or_else(|| ag_ui_core::AgUiError::protocol("text message state missing"))?;
+        let text = open_text
+            .take()
+            .ok_or_else(|| ag_ui_core::AgUiError::protocol("text message state missing"))?;
         events.push(Event::TextMessageEnd(TextMessageEndEvent {
             message_id: text.message_id,
             base: BaseEventFields::default(),
@@ -244,7 +254,9 @@ fn expand_tool_chunk(
     };
 
     if should_switch_tool {
-        let current = open_tool.take().ok_or_else(|| ag_ui_core::AgUiError::protocol("tool call state missing"))?;
+        let current = open_tool
+            .take()
+            .ok_or_else(|| ag_ui_core::AgUiError::protocol("tool call state missing"))?;
         events.push(Event::ToolCallEnd(ToolCallEndEvent {
             tool_call_id: current.tool_call_id,
             base: BaseEventFields::default(),
@@ -252,12 +264,12 @@ fn expand_tool_chunk(
     }
 
     if open_tool.is_none() {
-        let tool_call_id = tool_call_id
-            .ok_or_else(|| ag_ui_core::AgUiError::validation("first TOOL_CALL_CHUNK must include tool_call_id"))?;
-        let tool_call_name = chunk
-            .tool_call_name
-            .clone()
-            .ok_or_else(|| ag_ui_core::AgUiError::validation("first TOOL_CALL_CHUNK must include tool_call_name"))?;
+        let tool_call_id = tool_call_id.ok_or_else(|| {
+            ag_ui_core::AgUiError::validation("first TOOL_CALL_CHUNK must include tool_call_id")
+        })?;
+        let tool_call_name = chunk.tool_call_name.clone().ok_or_else(|| {
+            ag_ui_core::AgUiError::validation("first TOOL_CALL_CHUNK must include tool_call_name")
+        })?;
         open_tool.replace(OpenToolCall {
             tool_call_id: tool_call_id.clone(),
         });
@@ -273,7 +285,11 @@ fn expand_tool_chunk(
         let tool_call_id = open_tool
             .as_ref()
             .map(|open| open.tool_call_id.clone())
-            .ok_or_else(|| ag_ui_core::AgUiError::validation("TOOL_CALL_CHUNK received without active tool call"))?;
+            .ok_or_else(|| {
+                ag_ui_core::AgUiError::validation(
+                    "TOOL_CALL_CHUNK received without active tool call",
+                )
+            })?;
         events.push(Event::ToolCallArgs(ToolCallArgsEvent {
             tool_call_id,
             delta,
@@ -352,11 +368,13 @@ fn expand_reasoning_chunk(
                     "first REASONING_MESSAGE_CHUNK must include message_id",
                 )
             })?;
-        events.push(Event::ReasoningMessageContent(ReasoningMessageContentEvent {
-            message_id,
-            delta,
-            base: BaseEventFields::default(),
-        }));
+        events.push(Event::ReasoningMessageContent(
+            ReasoningMessageContentEvent {
+                message_id,
+                delta,
+                base: BaseEventFields::default(),
+            },
+        ));
     }
 
     Ok(events)
@@ -505,11 +523,13 @@ mod tests {
 
         #[tokio::test]
         async fn expands_single_reasoning_chunk() {
-            let events = collect_ok(vec![Event::ReasoningMessageChunk(ReasoningMessageChunkEvent {
-                message_id: Some("r1".into()),
-                delta: Some("plan".into()),
-                base: BaseEventFields::default(),
-            })])
+            let events = collect_ok(vec![Event::ReasoningMessageChunk(
+                ReasoningMessageChunkEvent {
+                    message_id: Some("r1".into()),
+                    delta: Some("plan".into()),
+                    base: BaseEventFields::default(),
+                },
+            )])
             .await;
 
             assert!(matches!(events[0], Event::ReasoningMessageStart(_)));

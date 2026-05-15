@@ -90,7 +90,10 @@ fn text_message_events_reject_invalid_roles() {
     }))
     .expect_err("invalid role should fail");
 
-    assert!(invalid.to_string().contains("unknown variant") || invalid.to_string().contains("invalid_role"));
+    assert!(
+        invalid.to_string().contains("unknown variant")
+            || invalid.to_string().contains("invalid_role")
+    );
 }
 
 #[test]
@@ -109,8 +112,14 @@ fn text_message_events_reject_tool_role() {
     }))
     .expect_err("tool role should fail for text chunk");
 
-    assert!(start_error.to_string().contains("tool") || start_error.to_string().contains("unknown variant"));
-    assert!(chunk_error.to_string().contains("tool") || chunk_error.to_string().contains("unknown variant"));
+    assert!(
+        start_error.to_string().contains("tool")
+            || start_error.to_string().contains("unknown variant")
+    );
+    assert!(
+        chunk_error.to_string().contains("tool")
+            || chunk_error.to_string().contains("unknown variant")
+    );
 }
 
 #[test]

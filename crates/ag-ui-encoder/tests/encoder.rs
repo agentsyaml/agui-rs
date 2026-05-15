@@ -10,7 +10,9 @@ fn encode_sse_wraps_serialized_event_in_data_frame() {
     let encoder = EventEncoder::new();
     let event = sample_event();
 
-    let frame = encoder.encode_sse(&event).expect("sse encoding should succeed");
+    let frame = encoder
+        .encode_sse(&event)
+        .expect("sse encoding should succeed");
 
     assert_eq!(
         frame,

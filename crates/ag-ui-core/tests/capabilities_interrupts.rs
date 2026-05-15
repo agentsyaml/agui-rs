@@ -1,5 +1,5 @@
-use ag_ui_core::Capabilities;
 use ag_ui_core::capabilities::InterruptsCapabilities;
+use ag_ui_core::Capabilities;
 use serde_json::json;
 
 #[test]
@@ -34,7 +34,9 @@ fn capabilities_nested_interrupts_preserve_new_flags() {
     }))
     .expect("deserialize capabilities");
 
-    let interrupts = capabilities.interrupts.expect("interrupts should be present");
+    let interrupts = capabilities
+        .interrupts
+        .expect("interrupts should be present");
     assert_eq!(interrupts.supported, Some(true));
     assert_eq!(interrupts.approvals, Some(true));
     assert_eq!(interrupts.interventions, Some(true));

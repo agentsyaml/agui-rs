@@ -1,4 +1,4 @@
-use ag_ui_core::{Event, RunAgentInput, Result};
+use ag_ui_core::{Event, Result, RunAgentInput};
 use futures::stream::BoxStream;
 
 /// Run-scoped metadata extracted from [`RunAgentInput`].

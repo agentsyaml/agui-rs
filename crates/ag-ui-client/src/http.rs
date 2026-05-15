@@ -34,12 +34,20 @@ impl Agent for HttpAgent {
         self.run_cancellable(input, AbortHandle::new()).await
     }
 
-    async fn run_cancellable(&self, input: RunAgentInput, abort: AbortHandle) -> Result<EventStream> {
+    async fn run_cancellable(
+        &self,
+        input: RunAgentInput,
+        abort: AbortHandle,
+    ) -> Result<EventStream> {
         if abort.is_aborted() {
             return Err(AgUiError::Cancelled);
         }
 
-        let mut request = self.client.post(&self.config.url).header(ACCEPT, AGUI_MEDIA_TYPE_SSE).json(&input);
+        let mut request = self
+            .client
+            .post(&self.config.url)
+            .header(ACCEPT, AGUI_MEDIA_TYPE_SSE)
+            .json(&input);
         for (key, value) in &self.config.headers {
             request = request.header(key, value);
         }
@@ -64,15 +72,22 @@ impl Agent for HttpAgent {
                 .and_then(|value| value.to_str().ok())
                 .unwrap_or_default()
                 .to_string();
-            let body = response
-                .text()
-                .await
-                .map_err(|error| AgUiError::other(format!("failed reading error response body: {error}")))?;
+            let body = response.text().await.map_err(|error| {
+                AgUiError::other(format!("failed reading error response body: {error}"))
+            })?;
             return Err(AgUiError::protocol(format!(
                 "HTTP {status} from {}{}{}",
                 self.config.url,
-                if content_type.is_empty() { "" } else { " (content-type: " },
-                if content_type.is_empty() { body.clone() } else { format!("{content_type}) {body}") }
+                if content_type.is_empty() {
+                    ""
+                } else {
+                    " (content-type: "
+                },
+                if content_type.is_empty() {
+                    body.clone()
+                } else {
+                    format!("{content_type}) {body}")
+                }
             )));
         }
 
@@ -90,7 +105,9 @@ impl Agent for HttpAgent {
         let stream: BoxStream<'static, Result<Event>> = match format {
             StreamFormat::Sse => parse_sse_stream(response.bytes_stream()),
             StreamFormat::Protobuf => Box::pin(stream::once(async {
-                Err(AgUiError::unsupported("protobuf decoding is not implemented"))
+                Err(AgUiError::unsupported(
+                    "protobuf decoding is not implemented",
+                ))
             })),
         };
 
@@ -142,7 +159,9 @@ mod abort_tests {
     }
 
     fn read_request(stream: &mut TcpStream) {
-        stream.set_read_timeout(Some(Duration::from_secs(1))).expect("set read timeout");
+        stream
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .expect("set read timeout");
         let mut buffer = Vec::new();
         let mut chunk = [0_u8; 1024];
 
@@ -162,7 +181,9 @@ mod abort_tests {
             .lines()
             .find_map(|line| {
                 let (name, value) = line.split_once(':')?;
-                name.eq_ignore_ascii_case("content-length").then(|| value.trim().parse::<usize>().ok()).flatten()
+                name.eq_ignore_ascii_case("content-length")
+                    .then(|| value.trim().parse::<usize>().ok())
+                    .flatten()
             })
             .unwrap_or(0);
 
@@ -228,7 +249,10 @@ mod abort_tests {
         sleep(Duration::from_millis(20)).await;
         abort.abort();
 
-        timeout(Duration::from_secs(1), task).await.expect("waiter should finish").expect("join waiter");
+        timeout(Duration::from_secs(1), task)
+            .await
+            .expect("waiter should finish")
+            .expect("join waiter");
     }
 
     #[tokio::test]
@@ -236,7 +260,9 @@ mod abort_tests {
         let abort = AbortHandle::new();
         abort.abort();
 
-        let result = http_agent("http://127.0.0.1:9".into()).run_cancellable(sample_input(), abort).await;
+        let result = http_agent("http://127.0.0.1:9".into())
+            .run_cancellable(sample_input(), abort)
+            .await;
 
         assert!(matches!(result, Err(AgUiError::Cancelled)));
     }
@@ -253,7 +279,8 @@ mod abort_tests {
         let abort = AbortHandle::new();
         let request_abort = abort.clone();
 
-        let task = tokio::spawn(async move { agent.run_cancellable(sample_input(), request_abort).await });
+        let task =
+            tokio::spawn(async move { agent.run_cancellable(sample_input(), request_abort).await });
 
         sleep(Duration::from_millis(50)).await;
         abort.abort();
@@ -301,7 +328,10 @@ mod abort_tests {
             .expect("second poll should finish")
             .expect("stream should yield cancellation item");
         assert!(matches!(second, Err(AgUiError::Cancelled)));
-        assert!(timeout(Duration::from_secs(1), stream.next()).await.expect("stream should close").is_none());
+        assert!(timeout(Duration::from_secs(1), stream.next())
+            .await
+            .expect("stream should close")
+            .is_none());
 
         handle.join().expect("join server thread");
     }
@@ -352,8 +382,17 @@ mod abort_tests {
             .await
             .expect("request should start");
 
-        assert!(matches!(stream.next().await, Some(Ok(Event::RunStarted(_)))));
-        assert!(matches!(stream.next().await, Some(Ok(Event::RunFinished(RunFinishedEvent { outcome: Some(RunFinishedOutcome::Success), .. })))));
+        assert!(matches!(
+            stream.next().await,
+            Some(Ok(Event::RunStarted(_)))
+        ));
+        assert!(matches!(
+            stream.next().await,
+            Some(Ok(Event::RunFinished(RunFinishedEvent {
+                outcome: Some(RunFinishedOutcome::Success),
+                ..
+            })))
+        ));
         assert!(stream.next().await.is_none());
 
         abort.abort();

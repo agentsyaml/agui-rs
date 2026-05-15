@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 
 use ag_ui_core::{
-    BaseEventFields, Event, ReasoningMessageContentEvent, ToolCallArgsEvent, TextMessageContentEvent,
+    BaseEventFields, Event, ReasoningMessageContentEvent, TextMessageContentEvent,
+    ToolCallArgsEvent,
 };
 
 struct PendingTextMessage {
@@ -260,7 +261,11 @@ fn flush_text_message(
     if !pending.contents.is_empty() {
         compacted.push(Event::TextMessageContent(TextMessageContentEvent {
             message_id: message_id.to_string(),
-            delta: pending.contents.into_iter().map(|part| part.delta).collect(),
+            delta: pending
+                .contents
+                .into_iter()
+                .map(|part| part.delta)
+                .collect(),
             base: BaseEventFields::default(),
         }));
     }
@@ -318,11 +323,17 @@ fn flush_reasoning(
     }
 
     if !pending.contents.is_empty() {
-        compacted.push(Event::ReasoningMessageContent(ReasoningMessageContentEvent {
-            message_id: message_id.to_string(),
-            delta: pending.contents.into_iter().map(|part| part.delta).collect(),
-            base: BaseEventFields::default(),
-        }));
+        compacted.push(Event::ReasoningMessageContent(
+            ReasoningMessageContentEvent {
+                message_id: message_id.to_string(),
+                delta: pending
+                    .contents
+                    .into_iter()
+                    .map(|part| part.delta)
+                    .collect(),
+                base: BaseEventFields::default(),
+            },
+        ));
     }
 
     if let Some(end) = pending.message_end {
@@ -351,9 +362,9 @@ fn remove_open_id(order: &mut Vec<String>, id: &str) {
 #[cfg(test)]
 mod tests {
     use ag_ui_core::{
-        factory, BaseEventFields, CustomEvent, Event, ReasoningEndEvent, ReasoningMessageContentEvent,
-        ReasoningMessageEndEvent, ReasoningMessageRole, ReasoningMessageStartEvent,
-        ReasoningStartEvent, TextMessageRole,
+        factory, BaseEventFields, CustomEvent, Event, ReasoningEndEvent,
+        ReasoningMessageContentEvent, ReasoningMessageEndEvent, ReasoningMessageRole,
+        ReasoningMessageStartEvent, ReasoningStartEvent, TextMessageRole,
     };
     use serde_json::json;
 
@@ -440,12 +451,15 @@ mod tests {
             factory::text_message_end("m1"),
         ]);
 
-        assert_eq!(result, vec![
-            text_start("m1"),
-            factory::text_message_content("m1", "ab"),
-            factory::text_message_end("m1"),
-            interleaved,
-        ]);
+        assert_eq!(
+            result,
+            vec![
+                text_start("m1"),
+                factory::text_message_content("m1", "ab"),
+                factory::text_message_end("m1"),
+                interleaved,
+            ]
+        );
     }
 
     #[test]
@@ -457,11 +471,14 @@ mod tests {
             factory::tool_call_end("tc1"),
         ]);
 
-        assert_eq!(result, vec![
-            factory::tool_call_start("tc1", "search"),
-            factory::tool_call_args("tc1", "{\"q\":\"rust\"}"),
-            factory::tool_call_end("tc1"),
-        ]);
+        assert_eq!(
+            result,
+            vec![
+                factory::tool_call_start("tc1", "search"),
+                factory::tool_call_args("tc1", "{\"q\":\"rust\"}"),
+                factory::tool_call_end("tc1"),
+            ]
+        );
     }
 
     #[test]
@@ -475,13 +492,16 @@ mod tests {
             reasoning_end("r1"),
         ]);
 
-        assert_eq!(result, vec![
-            reasoning_start("r1"),
-            reasoning_message_start("r1"),
-            reasoning_content("r1", "step 1 + step 2"),
-            reasoning_message_end("r1"),
-            reasoning_end("r1"),
-        ]);
+        assert_eq!(
+            result,
+            vec![
+                reasoning_start("r1"),
+                reasoning_message_start("r1"),
+                reasoning_content("r1", "step 1 + step 2"),
+                reasoning_message_end("r1"),
+                reasoning_end("r1"),
+            ]
+        );
     }
 
     #[test]
@@ -496,14 +516,17 @@ mod tests {
             reasoning_end("r1"),
         ]);
 
-        assert_eq!(result, vec![
-            reasoning_start("r1"),
-            reasoning_message_start("r1"),
-            reasoning_content("r1", "a"),
-            reasoning_message_end("r1"),
-            reasoning_end("r1"),
-            step,
-        ]);
+        assert_eq!(
+            result,
+            vec![
+                reasoning_start("r1"),
+                reasoning_message_start("r1"),
+                reasoning_content("r1", "a"),
+                reasoning_message_end("r1"),
+                reasoning_end("r1"),
+                step,
+            ]
+        );
     }
 
     #[test]
@@ -515,12 +538,15 @@ mod tests {
             factory::tool_call_args("tc1", "{}"),
         ]);
 
-        assert_eq!(result, vec![
-            text_start("m1"),
-            factory::text_message_content("m1", "hi"),
-            factory::tool_call_start("tc1", "search"),
-            factory::tool_call_args("tc1", "{}"),
-        ]);
+        assert_eq!(
+            result,
+            vec![
+                text_start("m1"),
+                factory::text_message_content("m1", "hi"),
+                factory::tool_call_start("tc1", "search"),
+                factory::tool_call_args("tc1", "{}"),
+            ]
+        );
     }
 
     #[test]
@@ -548,6 +574,9 @@ mod tests {
             reasoning_end("r1"),
         ];
 
-        assert_eq!(compact_events(events.clone()), compact_events(compact_events(events)));
+        assert_eq!(
+            compact_events(events.clone()),
+            compact_events(compact_events(events))
+        );
     }
 }

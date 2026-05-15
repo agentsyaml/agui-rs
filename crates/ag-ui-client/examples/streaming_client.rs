@@ -52,8 +52,7 @@ async fn main() -> ag_ui_core::Result<()> {
         agent: agent_cfg.clone(),
     });
 
-    let mut runner =
-        AgentRunner::new(agent, agent_cfg).with_subscriber(Arc::new(PrintSubscriber));
+    let mut runner = AgentRunner::new(agent, agent_cfg).with_subscriber(Arc::new(PrintSubscriber));
 
     let result = runner.run_agent(RunAgentParameters::default()).await?;
 

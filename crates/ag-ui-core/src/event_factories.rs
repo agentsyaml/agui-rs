@@ -1,12 +1,12 @@
 use crate::events::{
     ActivityDeltaEvent, ActivitySnapshotEvent, BaseEventFields, CustomEvent, Event,
-    MessagesSnapshotEvent, RawEvent, ReasoningEncryptedValueEvent,
-    ReasoningEncryptedValueSubtype, ReasoningEndEvent, ReasoningMessageChunkEvent,
-    ReasoningMessageContentEvent, ReasoningMessageEndEvent, ReasoningMessageRole,
-    ReasoningMessageStartEvent, ReasoningStartEvent, RunErrorEvent, RunFinishedEvent,
-    RunFinishedOutcome, RunStartedEvent, StateDeltaEvent, StateSnapshotEvent, StepFinishedEvent,
-    StepStartedEvent, TextMessageChunkEvent, TextMessageContentEvent, TextMessageEndEvent,
-    TextMessageStartEvent, ThinkingEndEvent, ThinkingStartEvent, ThinkingTextMessageContentEvent,
+    MessagesSnapshotEvent, RawEvent, ReasoningEncryptedValueEvent, ReasoningEncryptedValueSubtype,
+    ReasoningEndEvent, ReasoningMessageChunkEvent, ReasoningMessageContentEvent,
+    ReasoningMessageEndEvent, ReasoningMessageRole, ReasoningMessageStartEvent,
+    ReasoningStartEvent, RunErrorEvent, RunFinishedEvent, RunFinishedOutcome, RunStartedEvent,
+    StateDeltaEvent, StateSnapshotEvent, StepFinishedEvent, StepStartedEvent,
+    TextMessageChunkEvent, TextMessageContentEvent, TextMessageEndEvent, TextMessageStartEvent,
+    ThinkingEndEvent, ThinkingStartEvent, ThinkingTextMessageContentEvent,
     ThinkingTextMessageEndEvent, ThinkingTextMessageStartEvent, ToolCallArgsEvent,
     ToolCallChunkEvent, ToolCallEndEvent, ToolCallResultEvent, ToolCallStartEvent, ToolResultRole,
 };
@@ -566,7 +566,14 @@ mod factories_tests {
     );
     factory_test!(
         create_text_message_chunk_event_builds_variant,
-        create_text_message_chunk_event(Some("m1".into()), Some(TextMessageRole::Assistant), Some("hi".into()), None, None, None),
+        create_text_message_chunk_event(
+            Some("m1".into()),
+            Some(TextMessageRole::Assistant),
+            Some("hi".into()),
+            None,
+            None,
+            None
+        ),
         Event::TextMessageChunk(_),
         EventType::TextMessageChunk
     );
@@ -608,7 +615,14 @@ mod factories_tests {
     );
     factory_test!(
         create_tool_call_chunk_event_builds_variant,
-        create_tool_call_chunk_event(Some("tc1".into()), Some("search".into()), Some("m1".into()), Some("}".into()), None, None),
+        create_tool_call_chunk_event(
+            Some("tc1".into()),
+            Some("search".into()),
+            Some("m1".into()),
+            Some("}".into()),
+            None,
+            None
+        ),
         Event::ToolCallChunk(_),
         EventType::ToolCallChunk
     );
@@ -638,13 +652,27 @@ mod factories_tests {
     );
     factory_test!(
         create_state_delta_event_builds_variant,
-        create_state_delta_event(vec![json!({"op": "replace", "path": "/x", "value": 2})], None, None),
+        create_state_delta_event(
+            vec![json!({"op": "replace", "path": "/x", "value": 2})],
+            None,
+            None
+        ),
         Event::StateDelta(_),
         EventType::StateDelta
     );
     factory_test!(
         create_messages_snapshot_event_builds_variant,
-        create_messages_snapshot_event(vec![Message::Assistant(AssistantMessage { id: "a1".into(), content: Some("hello".into()), name: None, tool_calls: None, encrypted_value: None })], None, None),
+        create_messages_snapshot_event(
+            vec![Message::Assistant(AssistantMessage {
+                id: "a1".into(),
+                content: Some("hello".into()),
+                name: None,
+                tool_calls: None,
+                encrypted_value: None
+            })],
+            None,
+            None
+        ),
         Event::MessagesSnapshot(_),
         EventType::MessagesSnapshot
     );
@@ -656,13 +684,24 @@ mod factories_tests {
     );
     factory_test!(
         create_activity_delta_event_builds_variant,
-        create_activity_delta_event("a1", "plan", vec![json!({"op": "add", "path": "/0", "value": "x"})], None, None),
+        create_activity_delta_event(
+            "a1",
+            "plan",
+            vec![json!({"op": "add", "path": "/0", "value": "x"})],
+            None,
+            None
+        ),
         Event::ActivityDelta(_),
         EventType::ActivityDelta
     );
     factory_test!(
         create_raw_event_builds_variant,
-        create_raw_event(json!({"provider": "test"}), Some("source".into()), None, None),
+        create_raw_event(
+            json!({"provider": "test"}),
+            Some("source".into()),
+            None,
+            None
+        ),
         Event::Raw(_),
         EventType::Raw
     );
@@ -674,7 +713,14 @@ mod factories_tests {
     );
     factory_test!(
         create_run_started_event_builds_variant,
-        create_run_started_event("t1", "r1", Some("p1".into()), Some(RunAgentInput::new("t1", "r1")), None, None),
+        create_run_started_event(
+            "t1",
+            "r1",
+            Some("p1".into()),
+            Some(RunAgentInput::new("t1", "r1")),
+            None,
+            None
+        ),
         Event::RunStarted(_),
         EventType::RunStarted
     );
@@ -692,7 +738,22 @@ mod factories_tests {
     );
     factory_test!(
         create_run_finished_interrupt_event_builds_variant,
-        create_run_finished_interrupt_event("t1", "r1", None, vec![Interrupt { id: "i1".into(), reason: "approval".into(), message: None, tool_call_id: None, response_schema: None, expires_at: None, metadata: None }], None, None),
+        create_run_finished_interrupt_event(
+            "t1",
+            "r1",
+            None,
+            vec![Interrupt {
+                id: "i1".into(),
+                reason: "approval".into(),
+                message: None,
+                tool_call_id: None,
+                response_schema: None,
+                expires_at: None,
+                metadata: None
+            }],
+            None,
+            None
+        ),
         Event::RunFinished(_),
         EventType::RunFinished
     );
@@ -752,7 +813,13 @@ mod factories_tests {
     );
     factory_test!(
         create_reasoning_encrypted_value_event_builds_variant,
-        create_reasoning_encrypted_value_event(ReasoningEncryptedValueSubtype::ToolCall, "tc1", "cipher", None, None),
+        create_reasoning_encrypted_value_event(
+            ReasoningEncryptedValueSubtype::ToolCall,
+            "tc1",
+            "cipher",
+            None,
+            None
+        ),
         Event::ReasoningEncryptedValue(_),
         EventType::ReasoningEncryptedValue
     );

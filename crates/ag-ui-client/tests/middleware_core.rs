@@ -1,20 +1,22 @@
 #![allow(dead_code)]
 #![allow(unused_imports)]
 
+#[path = "../src/agent.rs"]
+mod agent;
 #[path = "../src/apply.rs"]
 mod apply;
 #[path = "../src/chunks.rs"]
 mod chunks;
+#[path = "../src/middleware.rs"]
+mod middleware;
 #[path = "../src/subscriber.rs"]
 mod subscriber;
 #[path = "../src/verify.rs"]
 mod verify;
-#[path = "../src/middleware.rs"]
-mod middleware;
-#[path = "../src/agent.rs"]
-mod agent;
 
-use ag_ui_core::{factory, BaseEventFields, Event, RunFinishedEvent, RunFinishedOutcome, RunAgentInput};
+use ag_ui_core::{
+    factory, BaseEventFields, Event, RunAgentInput, RunFinishedEvent, RunFinishedOutcome,
+};
 use async_stream::try_stream;
 use async_trait::async_trait;
 use futures::{stream, StreamExt};
@@ -30,8 +32,13 @@ struct FakeAgent {
 #[async_trait]
 impl agent::Agent for FakeAgent {
     async fn run(&self, input: RunAgentInput) -> ag_ui_core::Result<agent::EventStream> {
-        self.seen_inputs.lock().expect("seen inputs lock").push(input);
-        Ok(Box::pin(stream::iter(self.events.clone().into_iter().map(Ok))))
+        self.seen_inputs
+            .lock()
+            .expect("seen inputs lock")
+            .push(input);
+        Ok(Box::pin(stream::iter(
+            self.events.clone().into_iter().map(Ok),
+        )))
     }
 }
 
@@ -96,7 +103,8 @@ async fn middleware_can_modify_the_event_stream() {
         emitted: Arc::clone(&emitted),
     });
 
-    let mut runner = agent::AgentRunner::new(agent, agent::AgentConfig::default()).with_middleware(chain);
+    let mut runner =
+        agent::AgentRunner::new(agent, agent::AgentConfig::default()).with_middleware(chain);
     let result = runner
         .run_agent(agent::RunAgentParameters {
             run_id: Some("test-run".into()),

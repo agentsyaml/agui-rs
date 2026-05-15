@@ -20,7 +20,10 @@ pub enum ResumeResponse {
 pub enum RunOutcome {
     Pending,
     Finished(Option<RunFinishedOutcome>),
-    Error { message: String, code: Option<String> },
+    Error {
+        message: String,
+        code: Option<String>,
+    },
 }
 
 /// Returns the terminal outcome derived from a run event slice.
@@ -64,7 +67,10 @@ pub fn build_resume_array(
     interrupts: &[Interrupt],
     responses: &HashMap<String, ResumeResponse>,
 ) -> Result<Vec<ResumeEntry>> {
-    let open_ids = interrupts.iter().map(|interrupt| interrupt.id.clone()).collect::<HashSet<_>>();
+    let open_ids = interrupts
+        .iter()
+        .map(|interrupt| interrupt.id.clone())
+        .collect::<HashSet<_>>();
     let response_ids = responses.keys().cloned().collect::<HashSet<_>>();
 
     let mut missing = open_ids
@@ -113,10 +119,15 @@ pub fn build_resume_array(
 mod tests {
     use std::collections::HashMap;
 
-    use ag_ui_core::{factory, BaseEventFields, Event, Interrupt, RunErrorEvent, RunFinishedEvent, RunFinishedOutcome};
+    use ag_ui_core::{
+        factory, BaseEventFields, Event, Interrupt, RunErrorEvent, RunFinishedEvent,
+        RunFinishedOutcome,
+    };
     use serde_json::json;
 
-    use super::{build_resume_array, get_run_outcome, is_interrupt_expired, ResumeResponse, RunOutcome};
+    use super::{
+        build_resume_array, get_run_outcome, is_interrupt_expired, ResumeResponse, RunOutcome,
+    };
 
     fn interrupt(id: &str, expires_at: Option<&str>) -> Interrupt {
         Interrupt {
@@ -142,7 +153,10 @@ mod tests {
 
     #[test]
     fn get_run_outcome_is_pending_without_terminal_event() {
-        assert_eq!(get_run_outcome(&[factory::run_started("t1", "r1")]), RunOutcome::Pending);
+        assert_eq!(
+            get_run_outcome(&[factory::run_started("t1", "r1")]),
+            RunOutcome::Pending
+        );
     }
 
     #[test]
@@ -206,7 +220,10 @@ mod tests {
 
     #[test]
     fn interrupt_expiration_is_false_for_non_interrupt_event() {
-        assert!(!is_interrupt_expired(&factory::run_started("t1", "r1"), "2026-01-01T00:00:00Z"));
+        assert!(!is_interrupt_expired(
+            &factory::run_started("t1", "r1"),
+            "2026-01-01T00:00:00Z"
+        ));
     }
 
     #[test]
@@ -251,10 +268,8 @@ mod tests {
     #[test]
     fn build_resume_array_errors_on_missing_response() {
         let interrupts = vec![interrupt("i1", None), interrupt("i2", None)];
-        let responses = HashMap::from([(
-            "i1".to_string(),
-            ResumeResponse::Resolved { payload: None },
-        )]);
+        let responses =
+            HashMap::from([("i1".to_string(), ResumeResponse::Resolved { payload: None })]);
 
         let error = build_resume_array(&interrupts, &responses).unwrap_err();
         assert!(error.to_string().contains("i2"));

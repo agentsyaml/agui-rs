@@ -26,7 +26,10 @@ async fn collect_ok(events: Vec<Event>) -> Vec<Event> {
 fn assert_validation(result: &Result<Event, AgUiError>, expected: &str) {
     match result {
         Err(AgUiError::Validation(message)) => {
-            assert!(message.contains(expected), "expected '{expected}' in '{message}'");
+            assert!(
+                message.contains(expected),
+                "expected '{expected}' in '{message}'"
+            );
         }
         other => panic!("expected validation error, got {other:?}"),
     }
@@ -294,7 +297,10 @@ async fn errors_when_first_text_message_chunk_has_no_id() {
     .await;
 
     assert_eq!(events.len(), 1);
-    assert_validation(&events[0], "first TEXT_MESSAGE_CHUNK must include message_id");
+    assert_validation(
+        &events[0],
+        "first TEXT_MESSAGE_CHUNK must include message_id",
+    );
 }
 
 #[tokio::test]
@@ -310,7 +316,10 @@ async fn errors_when_first_tool_call_chunk_has_no_id() {
     .await;
 
     assert_eq!(events.len(), 1);
-    assert_validation(&events[0], "first TOOL_CALL_CHUNK must include tool_call_id");
+    assert_validation(
+        &events[0],
+        "first TOOL_CALL_CHUNK must include tool_call_id",
+    );
 }
 
 #[tokio::test]
@@ -326,7 +335,10 @@ async fn errors_when_first_tool_call_chunk_has_no_name() {
     .await;
 
     assert_eq!(events.len(), 1);
-    assert_validation(&events[0], "first TOOL_CALL_CHUNK must include tool_call_name");
+    assert_validation(
+        &events[0],
+        "first TOOL_CALL_CHUNK must include tool_call_name",
+    );
 }
 
 #[tokio::test]
@@ -358,7 +370,12 @@ async fn preserves_tool_call_parent_message_id() {
 
 #[tokio::test]
 async fn passes_through_raw_events_without_transformation() {
-    let raw_event = create_raw_event(json!({ "some": "data" }), Some("test-source".into()), Some(1), None);
+    let raw_event = create_raw_event(
+        json!({ "some": "data" }),
+        Some("test-source".into()),
+        Some(1),
+        None,
+    );
     let events = collect_ok(vec![raw_event.clone()]).await;
 
     assert_eq!(events, vec![raw_event]);
@@ -417,14 +434,7 @@ async fn handles_a_complex_sequence_of_mixed_events() {
 async fn omits_text_content_event_when_chunk_has_no_delta() {
     let close_event = factory::run_finished("thread-123", "run-123");
     let events = collect_ok(vec![
-        create_text_message_chunk_event(
-            Some("msg-123".into()),
-            None,
-            None,
-            None,
-            Some(1),
-            None,
-        ),
+        create_text_message_chunk_event(Some("msg-123".into()), None, None, None, Some(1), None),
         close_event.clone(),
     ])
     .await;
@@ -556,7 +566,11 @@ async fn passes_name_from_text_message_chunk_to_start_event() {
 
     assert_eq!(
         events[0],
-        text_start("msg-123", TextMessageRole::Assistant, Some("research-agent"))
+        text_start(
+            "msg-123",
+            TextMessageRole::Assistant,
+            Some("research-agent")
+        )
     );
 }
 

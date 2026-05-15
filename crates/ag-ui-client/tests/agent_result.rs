@@ -15,11 +15,17 @@ struct FakeAgent {
 #[async_trait]
 impl Agent for FakeAgent {
     async fn run(&self, _input: RunAgentInput) -> Result<BoxStream<'static, Result<Event>>> {
-        Ok(Box::pin(stream::iter(self.events.clone().into_iter().map(Ok))))
+        Ok(Box::pin(stream::iter(
+            self.events.clone().into_iter().map(Ok),
+        )))
     }
 }
 
-fn run_finished(run_id: &str, result: Option<serde_json::Value>, outcome: Option<RunFinishedOutcome>) -> Event {
+fn run_finished(
+    run_id: &str,
+    result: Option<serde_json::Value>,
+    outcome: Option<RunFinishedOutcome>,
+) -> Event {
     Event::RunFinished(RunFinishedEvent {
         thread_id: "thread-1".into(),
         run_id: run_id.into(),
@@ -36,25 +42,29 @@ async fn returns_run_id_thread_id_new_messages_and_new_state() {
             factory::run_started("thread-1", "run-1"),
             Event::MessagesSnapshot(MessagesSnapshotEvent {
                 messages: vec![
-                Message::Assistant(AssistantMessage {
-                    id: "existing-1".into(),
-                    content: Some("before".into()),
-                    name: None,
-                    tool_calls: None,
-                    encrypted_value: None,
-                }),
-                Message::Assistant(AssistantMessage {
-                    id: "new-1".into(),
-                    content: Some("after".into()),
-                    name: None,
-                    tool_calls: None,
-                    encrypted_value: None,
-                }),
+                    Message::Assistant(AssistantMessage {
+                        id: "existing-1".into(),
+                        content: Some("before".into()),
+                        name: None,
+                        tool_calls: None,
+                        encrypted_value: None,
+                    }),
+                    Message::Assistant(AssistantMessage {
+                        id: "new-1".into(),
+                        content: Some("after".into()),
+                        name: None,
+                        tool_calls: None,
+                        encrypted_value: None,
+                    }),
                 ],
                 base: BaseEventFields::default(),
             }),
             factory::state_snapshot(json!({"counter": 2, "flag": true})),
-            run_finished("run-1", Some(json!({"ignored": true})), Some(RunFinishedOutcome::Success)),
+            run_finished(
+                "run-1",
+                Some(json!({"ignored": true})),
+                Some(RunFinishedOutcome::Success),
+            ),
         ],
     };
     let mut runner = AgentRunner::new(
@@ -96,20 +106,20 @@ async fn duplicate_ids_in_messages_snapshot_do_not_create_new_messages() {
             factory::run_started("thread-1", "run-1"),
             Event::MessagesSnapshot(MessagesSnapshotEvent {
                 messages: vec![
-                Message::Assistant(AssistantMessage {
-                    id: "existing-1".into(),
-                    content: Some("updated".into()),
-                    name: None,
-                    tool_calls: None,
-                    encrypted_value: None,
-                }),
-                Message::Assistant(AssistantMessage {
-                    id: "existing-2".into(),
-                    content: Some("same".into()),
-                    name: None,
-                    tool_calls: None,
-                    encrypted_value: None,
-                }),
+                    Message::Assistant(AssistantMessage {
+                        id: "existing-1".into(),
+                        content: Some("updated".into()),
+                        name: None,
+                        tool_calls: None,
+                        encrypted_value: None,
+                    }),
+                    Message::Assistant(AssistantMessage {
+                        id: "existing-2".into(),
+                        content: Some("same".into()),
+                        name: None,
+                        tool_calls: None,
+                        encrypted_value: None,
+                    }),
                 ],
                 base: BaseEventFields::default(),
             }),
@@ -139,7 +149,10 @@ async fn duplicate_ids_in_messages_snapshot_do_not_create_new_messages() {
         },
     );
 
-    let result = runner.run_agent(RunAgentParameters::default()).await.expect("run succeeds");
+    let result = runner
+        .run_agent(RunAgentParameters::default())
+        .await
+        .expect("run succeeds");
 
     assert!(result.new_messages.is_empty());
 }
@@ -158,28 +171,28 @@ async fn preserves_order_of_new_messages_from_messages_snapshot() {
             factory::run_started("thread-1", "run-1"),
             Event::MessagesSnapshot(MessagesSnapshotEvent {
                 messages: vec![
-                existing.clone(),
-                Message::Assistant(AssistantMessage {
-                    id: "new-1".into(),
-                    content: Some("first".into()),
-                    name: None,
-                    tool_calls: None,
-                    encrypted_value: None,
-                }),
-                Message::Assistant(AssistantMessage {
-                    id: "new-2".into(),
-                    content: Some("second".into()),
-                    name: None,
-                    tool_calls: None,
-                    encrypted_value: None,
-                }),
-                Message::Assistant(AssistantMessage {
-                    id: "new-3".into(),
-                    content: Some("third".into()),
-                    name: None,
-                    tool_calls: None,
-                    encrypted_value: None,
-                }),
+                    existing.clone(),
+                    Message::Assistant(AssistantMessage {
+                        id: "new-1".into(),
+                        content: Some("first".into()),
+                        name: None,
+                        tool_calls: None,
+                        encrypted_value: None,
+                    }),
+                    Message::Assistant(AssistantMessage {
+                        id: "new-2".into(),
+                        content: Some("second".into()),
+                        name: None,
+                        tool_calls: None,
+                        encrypted_value: None,
+                    }),
+                    Message::Assistant(AssistantMessage {
+                        id: "new-3".into(),
+                        content: Some("third".into()),
+                        name: None,
+                        tool_calls: None,
+                        encrypted_value: None,
+                    }),
                 ],
                 base: BaseEventFields::default(),
             }),
@@ -194,10 +207,17 @@ async fn preserves_order_of_new_messages_from_messages_snapshot() {
         },
     );
 
-    let result = runner.run_agent(RunAgentParameters::default()).await.expect("run succeeds");
+    let result = runner
+        .run_agent(RunAgentParameters::default())
+        .await
+        .expect("run succeeds");
 
     assert_eq!(
-        result.new_messages.iter().map(|message| message.id()).collect::<Vec<_>>(),
+        result
+            .new_messages
+            .iter()
+            .map(|message| message.id())
+            .collect::<Vec<_>>(),
         vec!["new-1", "new-2", "new-3"]
     );
 }
@@ -219,13 +239,17 @@ async fn activity_messages_are_returned_as_new_messages_with_accumulated_operati
             Event::ActivityDelta(ActivityDeltaEvent {
                 message_id: "activity-ops".into(),
                 activity_type: "PLAN".into(),
-                patch: vec![json!({"op": "add", "path": "/operations/-", "value": first_operation})],
+                patch: vec![
+                    json!({"op": "add", "path": "/operations/-", "value": first_operation}),
+                ],
                 base: BaseEventFields::default(),
             }),
             Event::ActivityDelta(ActivityDeltaEvent {
                 message_id: "activity-ops".into(),
                 activity_type: "PLAN".into(),
-                patch: vec![json!({"op": "add", "path": "/operations/-", "value": second_operation})],
+                patch: vec![
+                    json!({"op": "add", "path": "/operations/-", "value": second_operation}),
+                ],
                 base: BaseEventFields::default(),
             }),
             run_finished("run-ops", None, Some(RunFinishedOutcome::Success)),
@@ -284,7 +308,10 @@ async fn interrupt_outcome_is_exposed_in_result_shape() {
     };
     let mut runner = AgentRunner::new(agent, AgentConfig::default());
 
-    let result = runner.run_agent(RunAgentParameters::default()).await.expect("run succeeds");
+    let result = runner
+        .run_agent(RunAgentParameters::default())
+        .await
+        .expect("run succeeds");
 
     assert_eq!(
         result.outcome,

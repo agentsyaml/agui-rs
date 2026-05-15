@@ -1,5 +1,5 @@
-use ag_ui_core::{ActivityDeltaEvent, ActivitySnapshotEvent, Event};
 use ag_ui_core::types::{ActivityMessage, Message};
+use ag_ui_core::{ActivityDeltaEvent, ActivitySnapshotEvent, Event};
 use serde_json::json;
 
 #[test]
@@ -13,7 +13,13 @@ fn activity_snapshot_event_defaults_replace_to_true() {
     .expect("deserialize activity snapshot");
 
     match event {
-        Event::ActivitySnapshot(ActivitySnapshotEvent { message_id, activity_type, content, replace, .. }) => {
+        Event::ActivitySnapshot(ActivitySnapshotEvent {
+            message_id,
+            activity_type,
+            content,
+            replace,
+            ..
+        }) => {
             assert_eq!(message_id, "msg_activity");
             assert_eq!(activity_type, "PLAN");
             assert_eq!(content.get("tasks"), Some(&json!(["search"])));
@@ -67,9 +73,16 @@ fn activity_message_parses_canonical_shape() {
     .expect("deserialize activity message");
 
     match message {
-        Message::Activity(ActivityMessage { activity_type, content, .. }) => {
+        Message::Activity(ActivityMessage {
+            activity_type,
+            content,
+            ..
+        }) => {
             assert_eq!(activity_type, "PLAN");
-            assert_eq!(content, serde_json::Map::from_iter([("tasks".to_string(), json!([]))]));
+            assert_eq!(
+                content,
+                serde_json::Map::from_iter([("tasks".to_string(), json!([]))])
+            );
         }
         other => panic!("expected Activity message, got {other:?}"),
     }

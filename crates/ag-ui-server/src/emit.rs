@@ -33,7 +33,8 @@ impl EventEmitter {
 
     pub async fn text_message(&self, message_id: &str, text: &str) -> Result<()> {
         self.emit(factory::text_message_start(message_id)).await?;
-        self.emit(factory::text_message_content(message_id, text)).await?;
+        self.emit(factory::text_message_content(message_id, text))
+            .await?;
         self.emit(factory::text_message_end(message_id)).await
     }
 }
@@ -56,7 +57,10 @@ mod tests {
     async fn channel_round_trip_receives_emitted_event() {
         let (emitter, mut stream) = channel(4);
 
-        emitter.emit(factory::run_started("thread-1", "run-1")).await.unwrap();
+        emitter
+            .emit(factory::run_started("thread-1", "run-1"))
+            .await
+            .unwrap();
 
         let event = stream.next().await.unwrap().unwrap();
         assert!(matches!(event, Event::RunStarted(_)));

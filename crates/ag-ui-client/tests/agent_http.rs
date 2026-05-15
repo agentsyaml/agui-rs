@@ -1,4 +1,4 @@
-use ag_ui_client::{Agent, AgentConfig, AgUiError, HttpAgent, HttpAgentConfig, RunAgentInput};
+use ag_ui_client::{AgUiError, Agent, AgentConfig, HttpAgent, HttpAgentConfig, RunAgentInput};
 use ag_ui_core::Event;
 use futures::StreamExt;
 use serde_json::Value;
@@ -46,18 +46,26 @@ fn read_request(stream: &mut TcpStream) -> CapturedRequest {
 
     let header_end = loop {
         let read = stream.read(&mut chunk).expect("read request");
-        assert!(read > 0, "connection closed before request headers completed");
+        assert!(
+            read > 0,
+            "connection closed before request headers completed"
+        );
         buffer.extend_from_slice(&chunk[..read]);
         if let Some(position) = buffer.windows(4).position(|window| window == b"\r\n\r\n") {
             break position + 4;
         }
     };
 
-    let headers_text = String::from_utf8(buffer[..header_end].to_vec()).expect("headers should be utf8");
+    let headers_text =
+        String::from_utf8(buffer[..header_end].to_vec()).expect("headers should be utf8");
     let mut headers = HashMap::new();
     let mut content_length = 0_usize;
 
-    for line in headers_text.lines().skip(1).filter(|line| !line.trim().is_empty()) {
+    for line in headers_text
+        .lines()
+        .skip(1)
+        .filter(|line| !line.trim().is_empty())
+    {
         let (name, value) = line.split_once(':').expect("header should contain colon");
         let value = value.trim().to_string();
         if name.eq_ignore_ascii_case("content-length") {
@@ -79,9 +87,7 @@ fn read_request(stream: &mut TcpStream) -> CapturedRequest {
 }
 
 fn write_response_headers(stream: &mut TcpStream, status: &str, content_type: &str) {
-    let response = format!(
-        "{status}\r\nContent-Type: {content_type}\r\nConnection: close\r\n\r\n"
-    );
+    let response = format!("{status}\r\nContent-Type: {content_type}\r\nConnection: close\r\n\r\n");
     stream
         .write_all(response.as_bytes())
         .expect("write response headers");
@@ -118,7 +124,10 @@ async fn should_configure_and_execute_http_requests_correctly() {
     assert!(events.is_empty());
 
     let captured = request_rx.recv().expect("receive captured request");
-    assert_eq!(captured.headers.get("accept").map(String::as_str), Some("text/event-stream"));
+    assert_eq!(
+        captured.headers.get("accept").map(String::as_str),
+        Some("text/event-stream")
+    );
     assert_eq!(
         captured.headers.get("authorization").map(String::as_str),
         Some("Bearer test-token")

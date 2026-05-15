@@ -1,8 +1,7 @@
 use ag_ui_client::{default_apply_events, expand_chunks};
 use ag_ui_core::{
     event_factories::create_text_message_chunk_event, factory, AgUiError, BaseEventFields, Event,
-    Message, TextMessageContentEvent, TextMessageEndEvent, TextMessageRole,
-    TextMessageStartEvent,
+    Message, TextMessageContentEvent, TextMessageEndEvent, TextMessageRole, TextMessageStartEvent,
 };
 use futures::{stream, StreamExt};
 
@@ -197,7 +196,10 @@ async fn should_handle_text_message_chunks_with_different_roles() {
     assert_eq!(events[1], text_start("msg-user", TextMessageRole::User));
     assert_eq!(events[2], text_content("msg-user", "User chunk message"));
     assert_eq!(events[4], text_start("msg-system", TextMessageRole::System));
-    assert_eq!(events[5], text_content("msg-system", "System chunk message"));
+    assert_eq!(
+        events[5],
+        text_content("msg-system", "System chunk message")
+    );
 }
 
 #[tokio::test]

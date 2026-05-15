@@ -4,7 +4,9 @@
 #[path = "../src/middleware.rs"]
 mod middleware;
 
-use ag_ui_core::{factory, BaseEventFields, Event, RunFinishedEvent, ToolCallResultEvent, ToolResultRole};
+use ag_ui_core::{
+    factory, BaseEventFields, Event, RunFinishedEvent, ToolCallResultEvent, ToolResultRole,
+};
 use futures::{stream, StreamExt};
 use middleware::filter_tool_calls::{FilterToolCallsConfig, FilterToolCallsMiddleware};
 use middleware::Middleware as _;
@@ -40,12 +42,17 @@ async fn run_filter(middleware: FilterToolCallsMiddleware) -> Vec<Event> {
 
     let terminal: middleware::TerminalFn = Arc::new(move |_input| {
         let events = events.clone();
-        Box::pin(async move { Ok(Box::pin(stream::iter(events.into_iter().map(Ok))) as middleware::EventStream) })
+        Box::pin(async move {
+            Ok(Box::pin(stream::iter(events.into_iter().map(Ok))) as middleware::EventStream)
+        })
     });
 
     let stream = middleware
         .run(
-            middleware::MiddlewareInput::from(ag_ui_core::RunAgentInput::new("test-thread", "test-run")),
+            middleware::MiddlewareInput::from(ag_ui_core::RunAgentInput::new(
+                "test-thread",
+                "test-run",
+            )),
             terminal,
         )
         .await
@@ -84,9 +91,8 @@ async fn filters_out_disallowed_tool_calls() {
 
 #[tokio::test]
 async fn allowlist_keeps_only_allowed_tool_calls() {
-    let middleware = FilterToolCallsMiddleware::new(FilterToolCallsConfig::allowed(vec![
-        "calculator".into(),
-    ]));
+    let middleware =
+        FilterToolCallsMiddleware::new(FilterToolCallsConfig::allowed(vec!["calculator".into()]));
 
     let events = run_filter(middleware).await;
 

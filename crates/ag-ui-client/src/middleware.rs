@@ -1,3 +1,4 @@
+use ag_ui_core::types::UserMessage;
 use ag_ui_core::{
     AgUiError, BinaryInputContent, Event, InputContent, InputContentSource, Message,
     ReasoningEndEvent, ReasoningMessageContentEvent, ReasoningMessageEndEvent,
@@ -5,7 +6,6 @@ use ag_ui_core::{
     ThinkingEndEvent, ThinkingStartEvent, ThinkingTextMessageContentEvent,
     ThinkingTextMessageEndEvent, ThinkingTextMessageStartEvent, UserMessageContent,
 };
-use ag_ui_core::types::UserMessage;
 use async_stream::try_stream;
 use async_trait::async_trait;
 use futures::{future::BoxFuture, stream::BoxStream, StreamExt};
@@ -16,7 +16,11 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub type EventStream = BoxStream<'static, std::result::Result<Event, AgUiError>>;
-pub type NextFn = Arc<dyn Fn(MiddlewareInput) -> BoxFuture<'static, std::result::Result<EventStream, AgUiError>> + Send + Sync>;
+pub type NextFn = Arc<
+    dyn Fn(MiddlewareInput) -> BoxFuture<'static, std::result::Result<EventStream, AgUiError>>
+        + Send
+        + Sync,
+>;
 pub type TerminalFn = NextFn;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -27,7 +31,10 @@ pub struct MiddlewareInput {
 
 impl MiddlewareInput {
     pub fn new(run_agent_input: RunAgentInput, extras: Value) -> Self {
-        Self { run_agent_input, extras }
+        Self {
+            run_agent_input,
+            extras,
+        }
     }
 }
 
@@ -49,14 +56,20 @@ pub trait Middleware: Send + Sync {
     ) -> std::result::Result<EventStream, AgUiError>;
 }
 
-pub fn chain_middlewares(middlewares: Vec<Arc<dyn Middleware>>, terminal: TerminalFn) -> TerminalFn {
-    middlewares.into_iter().rev().fold(terminal, |next, middleware| {
-        Arc::new(move |input: MiddlewareInput| {
-            let middleware = Arc::clone(&middleware);
-            let next = Arc::clone(&next);
-            Box::pin(async move { middleware.run(input, next).await })
+pub fn chain_middlewares(
+    middlewares: Vec<Arc<dyn Middleware>>,
+    terminal: TerminalFn,
+) -> TerminalFn {
+    middlewares
+        .into_iter()
+        .rev()
+        .fold(terminal, |next, middleware| {
+            Arc::new(move |input: MiddlewareInput| {
+                let middleware = Arc::clone(&middleware);
+                let next = Arc::clone(&next);
+                Box::pin(async move { middleware.run(input, next).await })
+            })
         })
-    })
 }
 
 #[derive(Default, Clone)]
@@ -158,7 +171,9 @@ pub mod filter_tool_calls {
     impl FilterToolCallsMiddleware {
         pub fn new(config: FilterToolCallsConfig) -> Self {
             Self {
-                allowed_tools: config.allowed_tool_calls.map(|tools| tools.into_iter().collect()),
+                allowed_tools: config
+                    .allowed_tool_calls
+                    .map(|tools| tools.into_iter().collect()),
                 disallowed_tools: config
                     .disallowed_tool_calls
                     .map(|tools| tools.into_iter().collect()),
@@ -386,7 +401,11 @@ pub mod backward_compat {
     fn sanitize_run_agent_input_0_0_39(input: RunAgentInput) -> RunAgentInput {
         RunAgentInput {
             parent_run_id: None,
-            messages: input.messages.into_iter().map(sanitize_message_content_0_0_39).collect(),
+            messages: input
+                .messages
+                .into_iter()
+                .map(sanitize_message_content_0_0_39)
+                .collect(),
             ..input
         }
     }
@@ -421,7 +440,11 @@ pub mod backward_compat {
 
     fn upgrade_run_agent_input_0_0_47(input: RunAgentInput) -> RunAgentInput {
         RunAgentInput {
-            messages: input.messages.into_iter().map(upgrade_message_content_0_0_47).collect(),
+            messages: input
+                .messages
+                .into_iter()
+                .map(upgrade_message_content_0_0_47)
+                .collect(),
             ..input
         }
     }
@@ -436,7 +459,10 @@ pub mod backward_compat {
             }) => Message::User(UserMessage {
                 id,
                 content: UserMessageContent::Parts(
-                    parts.into_iter().map(convert_legacy_binary_to_new_format_0_0_47).collect(),
+                    parts
+                        .into_iter()
+                        .map(convert_legacy_binary_to_new_format_0_0_47)
+                        .collect(),
                 ),
                 name,
                 encrypted_value,
@@ -498,10 +524,12 @@ pub mod backward_compat {
         source: InputContentSource,
         filename: Option<String>,
     ) -> InputContent {
-        let metadata = filename.map(|filename| Value::Object(Map::from_iter([(
-            "filename".to_string(),
-            Value::String(filename),
-        )])));
+        let metadata = filename.map(|filename| {
+            Value::Object(Map::from_iter([(
+                "filename".to_string(),
+                Value::String(filename),
+            )]))
+        });
 
         if mime_type.starts_with("image/") {
             InputContent::Image { source, metadata }
@@ -539,7 +567,10 @@ fn generate_transformation_id(prefix: &str) -> String {
 #[cfg(test)]
 mod chain_tests {
     use super::*;
-    use ag_ui_core::{factory, BaseEventFields, ToolCallArgsEvent, ToolCallEndEvent, ToolCallResultEvent, ToolCallStartEvent};
+    use ag_ui_core::{
+        factory, BaseEventFields, ToolCallArgsEvent, ToolCallEndEvent, ToolCallResultEvent,
+        ToolCallStartEvent,
+    };
     use futures::stream;
     use std::sync::Mutex;
 
@@ -578,7 +609,10 @@ mod chain_tests {
             _input: MiddlewareInput,
             _next: NextFn,
         ) -> std::result::Result<EventStream, AgUiError> {
-            Ok(Box::pin(stream::iter(vec![Ok(factory::run_started("thread-short", "run-short"))])))
+            Ok(Box::pin(stream::iter(vec![Ok(factory::run_started(
+                "thread-short",
+                "run-short",
+            ))])))
         }
     }
 
@@ -622,8 +656,14 @@ mod chain_tests {
         let terminal: TerminalFn = Arc::new(move |_input| {
             let terminal_log = Arc::clone(&terminal_log);
             Box::pin(async move {
-                terminal_log.lock().expect("log lock").push("terminal".into());
-                Ok(Box::pin(stream::iter(vec![Ok(factory::run_started("thread-order", "run-order"))])) as EventStream)
+                terminal_log
+                    .lock()
+                    .expect("log lock")
+                    .push("terminal".into());
+                Ok(Box::pin(stream::iter(vec![Ok(factory::run_started(
+                    "thread-order",
+                    "run-order",
+                ))])) as EventStream)
             })
         });
 
@@ -632,13 +672,20 @@ mod chain_tests {
 
         assert_eq!(
             log.lock().expect("log lock").clone(),
-            vec!["first:before", "second:before", "terminal", "second:after", "first:after"]
+            vec![
+                "first:before",
+                "second:before",
+                "terminal",
+                "second:after",
+                "first:after"
+            ]
         );
     }
 
     #[tokio::test]
     async fn terminal_error_propagates() {
-        let terminal: TerminalFn = Arc::new(|_input| Box::pin(async { Err(AgUiError::other("terminal boom")) }));
+        let terminal: TerminalFn =
+            Arc::new(|_input| Box::pin(async { Err(AgUiError::other("terminal boom")) }));
         let chain = chain_middlewares(Vec::new(), terminal);
 
         let error = match chain(base_input()).await {
@@ -728,7 +775,13 @@ mod chain_tests {
             })
         });
 
-        let events = collect_events(chain.run(base_input(), terminal).await.expect("chain result")).await;
+        let events = collect_events(
+            chain
+                .run(base_input(), terminal)
+                .await
+                .expect("chain result"),
+        )
+        .await;
         assert_eq!(events.len(), 4);
     }
 }
@@ -737,7 +790,10 @@ mod chain_tests {
 mod filter_tool_calls_tests {
     use super::filter_tool_calls::{FilterToolCallsConfig, FilterToolCallsMiddleware};
     use super::*;
-    use ag_ui_core::{factory, BaseEventFields, ToolCallArgsEvent, ToolCallEndEvent, ToolCallResultEvent, ToolCallStartEvent};
+    use ag_ui_core::{
+        factory, BaseEventFields, ToolCallArgsEvent, ToolCallEndEvent, ToolCallResultEvent,
+        ToolCallStartEvent,
+    };
     use futures::stream;
 
     fn base_input() -> MiddlewareInput {
@@ -782,7 +838,9 @@ mod filter_tool_calls_tests {
     async fn run_filter(middleware: FilterToolCallsMiddleware, events: Vec<Event>) -> Vec<Event> {
         let terminal: TerminalFn = Arc::new(move |_input| {
             let events = events.clone();
-            Box::pin(async move { Ok(Box::pin(stream::iter(events.into_iter().map(Ok))) as EventStream) })
+            Box::pin(async move {
+                Ok(Box::pin(stream::iter(events.into_iter().map(Ok))) as EventStream)
+            })
         });
         let chain = chain_middlewares(vec![Arc::new(middleware)], terminal);
         collect_events(chain(base_input()).await.expect("filtered stream")).await
@@ -790,7 +848,9 @@ mod filter_tool_calls_tests {
 
     #[tokio::test]
     async fn drops_disallowed_tool_calls_and_followups() {
-        let middleware = FilterToolCallsMiddleware::new(FilterToolCallsConfig::disallowed(vec!["blocked".into()]));
+        let middleware = FilterToolCallsMiddleware::new(FilterToolCallsConfig::disallowed(vec![
+            "blocked".into(),
+        ]));
         let mut events = vec![factory::run_started("thread-filter", "run-filter")];
         events.extend(tool_events("blocked-1", "blocked"));
         events.extend(tool_events("allowed-1", "allowed"));
@@ -808,7 +868,8 @@ mod filter_tool_calls_tests {
 
     #[tokio::test]
     async fn passes_unmatched_disallowed_tool_calls() {
-        let middleware = FilterToolCallsMiddleware::new(FilterToolCallsConfig::disallowed(vec!["other".into()]));
+        let middleware =
+            FilterToolCallsMiddleware::new(FilterToolCallsConfig::disallowed(vec!["other".into()]));
         let filtered = run_filter(middleware, tool_events("allowed-1", "allowed")).await;
 
         assert_eq!(filtered.len(), 4);
@@ -816,19 +877,24 @@ mod filter_tool_calls_tests {
 
     #[tokio::test]
     async fn allowed_list_filters_out_non_members() {
-        let middleware = FilterToolCallsMiddleware::new(FilterToolCallsConfig::allowed(vec!["keep".into()]));
+        let middleware =
+            FilterToolCallsMiddleware::new(FilterToolCallsConfig::allowed(vec!["keep".into()]));
         let mut events = tool_events("keep-1", "keep");
         events.extend(tool_events("drop-1", "drop"));
 
         let filtered = run_filter(middleware, events).await;
 
         assert_eq!(filtered.len(), 4);
-        assert!(filtered.iter().all(|event| !matches!(event, Event::ToolCallStart(e) if e.tool_call_name == "drop")));
+        assert!(filtered
+            .iter()
+            .all(|event| !matches!(event, Event::ToolCallStart(e) if e.tool_call_name == "drop")));
     }
 
     #[tokio::test]
     async fn regex_like_patterns_are_treated_literally() {
-        let middleware = FilterToolCallsMiddleware::new(FilterToolCallsConfig::disallowed(vec!["calc_.*".into()]));
+        let middleware = FilterToolCallsMiddleware::new(FilterToolCallsConfig::disallowed(vec![
+            "calc_.*".into(),
+        ]));
         let filtered = run_filter(middleware, tool_events("calc-1", "calc_sum")).await;
 
         assert_eq!(filtered.len(), 4);
@@ -836,7 +902,8 @@ mod filter_tool_calls_tests {
 
     #[tokio::test]
     async fn empty_disallowed_filter_keeps_all_events() {
-        let middleware = FilterToolCallsMiddleware::new(FilterToolCallsConfig::disallowed(Vec::new()));
+        let middleware =
+            FilterToolCallsMiddleware::new(FilterToolCallsConfig::disallowed(Vec::new()));
         let filtered = run_filter(middleware, tool_events("allowed-1", "allowed")).await;
 
         assert_eq!(filtered.len(), 4);
@@ -854,20 +921,25 @@ mod filter_tool_calls_tests {
 
 #[cfg(test)]
 mod backward_compat_tests {
-    use super::backward_compat::{BackwardCompat0_0_39, BackwardCompat0_0_45, BackwardCompat0_0_47};
+    use super::backward_compat::{
+        BackwardCompat0_0_39, BackwardCompat0_0_45, BackwardCompat0_0_47,
+    };
     use super::*;
+    use ag_ui_core::types::{AssistantMessage, DeveloperMessage, SystemMessage, UserMessage};
     use ag_ui_core::{
         factory, BaseEventFields, BinaryInputContent, InputContent, InputContentSource, Message,
         ReasoningMessageRole, ThinkingEndEvent, ThinkingStartEvent,
         ThinkingTextMessageContentEvent, ThinkingTextMessageEndEvent,
         ThinkingTextMessageStartEvent, UserMessageContent,
     };
-    use ag_ui_core::types::{AssistantMessage, DeveloperMessage, SystemMessage, UserMessage};
     use futures::stream;
     use std::sync::Mutex;
 
     fn base_input() -> MiddlewareInput {
-        MiddlewareInput::new(RunAgentInput::new("thread-backward", "run-backward"), Value::Object(Map::new()))
+        MiddlewareInput::new(
+            RunAgentInput::new("thread-backward", "run-backward"),
+            Value::Object(Map::new()),
+        )
     }
 
     async fn collect_events(mut stream: EventStream) -> Vec<Event> {
@@ -891,7 +963,9 @@ mod backward_compat_tests {
     fn events_terminal(events: Vec<Event>) -> TerminalFn {
         Arc::new(move |_input| {
             let events = events.clone();
-            Box::pin(async move { Ok(Box::pin(stream::iter(events.into_iter().map(Ok))) as EventStream) })
+            Box::pin(async move {
+                Ok(Box::pin(stream::iter(events.into_iter().map(Ok))) as EventStream)
+            })
         })
     }
 
@@ -926,7 +1000,9 @@ mod backward_compat_tests {
         input.run_agent_input.messages = vec![Message::User(UserMessage {
             id: "user-1".into(),
             content: UserMessageContent::Parts(vec![
-                InputContent::Text { text: "hello".into() },
+                InputContent::Text {
+                    text: "hello".into(),
+                },
                 InputContent::Image {
                     source: InputContentSource::Url {
                         value: "https://example.com/image.png".into(),
@@ -934,7 +1010,9 @@ mod backward_compat_tests {
                     },
                     metadata: None,
                 },
-                InputContent::Text { text: " world".into() },
+                InputContent::Text {
+                    text: " world".into(),
+                },
             ]),
             name: None,
             encrypted_value: None,
@@ -942,7 +1020,11 @@ mod backward_compat_tests {
 
         let _ = chain(input).await.expect("run should succeed");
 
-        let captured = captured.lock().expect("capture lock").clone().expect("captured input");
+        let captured = captured
+            .lock()
+            .expect("capture lock")
+            .clone()
+            .expect("captured input");
         match &captured.run_agent_input.messages[0] {
             Message::User(UserMessage {
                 content: UserMessageContent::Text(text),
@@ -973,7 +1055,11 @@ mod backward_compat_tests {
 
         let _ = chain(input).await.expect("run should succeed");
 
-        let captured = captured.lock().expect("capture lock").clone().expect("captured input");
+        let captured = captured
+            .lock()
+            .expect("capture lock")
+            .clone()
+            .expect("captured input");
         match &captured.run_agent_input.messages[0] {
             Message::User(UserMessage {
                 content: UserMessageContent::Text(text),
@@ -1103,7 +1189,11 @@ mod backward_compat_tests {
 
         let _ = chain(input).await.expect("run should succeed");
 
-        let captured = captured.lock().expect("capture lock").clone().expect("captured input");
+        let captured = captured
+            .lock()
+            .expect("capture lock")
+            .clone()
+            .expect("captured input");
         match &captured.run_agent_input.messages[0] {
             Message::User(UserMessage {
                 content: UserMessageContent::Parts(parts),
@@ -1154,7 +1244,11 @@ mod backward_compat_tests {
 
         let _ = chain(input).await.expect("run should succeed");
 
-        let captured = captured.lock().expect("capture lock").clone().expect("captured input");
+        let captured = captured
+            .lock()
+            .expect("capture lock")
+            .clone()
+            .expect("captured input");
         match &captured.run_agent_input.messages[0] {
             Message::User(UserMessage {
                 content: UserMessageContent::Parts(parts),
@@ -1199,7 +1293,11 @@ mod backward_compat_tests {
 
         let _ = chain(input).await.expect("run should succeed");
 
-        let captured = captured.lock().expect("capture lock").clone().expect("captured input");
+        let captured = captured
+            .lock()
+            .expect("capture lock")
+            .clone()
+            .expect("captured input");
         match &captured.run_agent_input.messages[0] {
             Message::User(UserMessage {
                 content: UserMessageContent::Parts(parts),
@@ -1253,10 +1351,23 @@ mod backward_compat_tests {
 
         let _ = chain(input).await.expect("run should succeed");
 
-        let captured = captured.lock().expect("capture lock").clone().expect("captured input");
-        assert!(matches!(captured.run_agent_input.messages[0], Message::Developer(_)));
-        assert!(matches!(captured.run_agent_input.messages[1], Message::System(_)));
-        assert!(matches!(captured.run_agent_input.messages[2], Message::Assistant(_)));
+        let captured = captured
+            .lock()
+            .expect("capture lock")
+            .clone()
+            .expect("captured input");
+        assert!(matches!(
+            captured.run_agent_input.messages[0],
+            Message::Developer(_)
+        ));
+        assert!(matches!(
+            captured.run_agent_input.messages[1],
+            Message::System(_)
+        ));
+        assert!(matches!(
+            captured.run_agent_input.messages[2],
+            Message::Assistant(_)
+        ));
         match &captured.run_agent_input.messages[3] {
             Message::User(UserMessage {
                 content: UserMessageContent::Parts(parts),

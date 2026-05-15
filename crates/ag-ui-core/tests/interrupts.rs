@@ -12,10 +12,13 @@ fn interrupt_accepts_only_required_fields() {
     assert_eq!(interrupt.id, "int-1");
     assert_eq!(interrupt.reason, "tool_call");
     assert_eq!(interrupt.message, None);
-    assert_eq!(serde_json::to_value(interrupt).unwrap(), json!({
-        "id": "int-1",
-        "reason": "tool_call"
-    }));
+    assert_eq!(
+        serde_json::to_value(interrupt).unwrap(),
+        json!({
+            "id": "int-1",
+            "reason": "tool_call"
+        })
+    );
 }
 
 #[test]
@@ -30,7 +33,8 @@ fn interrupt_accepts_all_standard_optional_fields() {
         "metadata": { "foo": "bar" }
     });
 
-    let interrupt: Interrupt = serde_json::from_value(value.clone()).expect("deserialize interrupt");
+    let interrupt: Interrupt =
+        serde_json::from_value(value.clone()).expect("deserialize interrupt");
     assert_eq!(serde_json::to_value(interrupt).unwrap(), value);
 }
 

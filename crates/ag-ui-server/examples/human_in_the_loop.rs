@@ -20,7 +20,10 @@ struct HumanInTheLoopHandler;
 async fn send_tool_call_events(emitter: &EventEmitter, run_id: &str) {
     let tool_call_id = format!("tc-{}-steps", run_id);
     let _ = emitter
-        .emit(factory::tool_call_start(&tool_call_id, "generate_task_steps"))
+        .emit(factory::tool_call_start(
+            &tool_call_id,
+            "generate_task_steps",
+        ))
         .await;
     let _ = emitter
         .emit(factory::tool_call_args(&tool_call_id, "{\"steps\":["))
@@ -33,11 +36,15 @@ async fn send_tool_call_events(emitter: &EventEmitter, run_id: &str) {
             i + 1,
             comma
         );
-        let _ = emitter.emit(factory::tool_call_args(&tool_call_id, chunk)).await;
+        let _ = emitter
+            .emit(factory::tool_call_args(&tool_call_id, chunk))
+            .await;
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
 
-    let _ = emitter.emit(factory::tool_call_args(&tool_call_id, "]}")).await;
+    let _ = emitter
+        .emit(factory::tool_call_args(&tool_call_id, "]}"))
+        .await;
     let _ = emitter.emit(factory::tool_call_end(&tool_call_id)).await;
 }
 

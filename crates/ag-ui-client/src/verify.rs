@@ -54,8 +54,16 @@ where
 impl VerifierState {
     fn validate_event(&mut self, event: &Event) -> VerifyResult<()> {
         if self.run_finished {
-            let terminal = if self.run_errored { "RUN_ERROR" } else { "RUN_FINISHED" };
-            let status = if self.run_errored { "errored" } else { "finished" };
+            let terminal = if self.run_errored {
+                "RUN_ERROR"
+            } else {
+                "RUN_FINISHED"
+            };
+            let status = if self.run_errored {
+                "errored"
+            } else {
+                "finished"
+            };
             return Err(AgUiError::validation(format!(
                 "Cannot send event type '{}': The run has already {status} with '{terminal}'. No further events can be sent.",
                 event_name(event)
@@ -224,7 +232,11 @@ impl VerifierState {
         }
     }
 
-    fn start_tool_call(&mut self, tool_call_id: &str, parent_message_id: Option<&str>) -> VerifyResult<()> {
+    fn start_tool_call(
+        &mut self,
+        tool_call_id: &str,
+        parent_message_id: Option<&str>,
+    ) -> VerifyResult<()> {
         if let Some(active) = self.active_tool_call_id.as_deref() {
             return Err(AgUiError::validation(format!(
                 "Cannot send 'TOOL_CALL_START' event: A tool call with ID '{}' is already in progress. Complete it with 'TOOL_CALL_END' first.",
@@ -265,7 +277,11 @@ impl VerifierState {
         }
     }
 
-    fn tool_call_chunk(&self, tool_call_id: Option<&str>, parent_message_id: Option<&str>) -> VerifyResult<()> {
+    fn tool_call_chunk(
+        &self,
+        tool_call_id: Option<&str>,
+        parent_message_id: Option<&str>,
+    ) -> VerifyResult<()> {
         match (self.active_tool_call_id.as_deref(), tool_call_id) {
             (Some(active), Some(tool_call_id)) if active != tool_call_id => {
                 return Err(AgUiError::validation(format!(
@@ -573,7 +589,10 @@ mod tests {
 
     fn assert_validation(result: &VerifyResult<Event>, expected: &str) {
         match result {
-            Err(AgUiError::Validation(message)) => assert!(message.contains(expected), "expected '{expected}' in '{message}'"),
+            Err(AgUiError::Validation(message)) => assert!(
+                message.contains(expected),
+                "expected '{expected}' in '{message}'"
+            ),
             other => panic!("expected validation error, got {other:?}"),
         }
     }
@@ -685,7 +704,10 @@ mod tests {
             ])
             .await;
             assert!(items[0].is_ok());
-            assert_validation(&items[1], "Cannot send 'RUN_STARTED' while a run is still active");
+            assert_validation(
+                &items[1],
+                "Cannot send 'RUN_STARTED' while a run is still active",
+            );
         }
 
         #[tokio::test]
@@ -696,7 +718,10 @@ mod tests {
                 factory::text_message_start("m1"),
             ])
             .await;
-            assert_validation(&items[2], "The run has already finished with 'RUN_FINISHED'");
+            assert_validation(
+                &items[2],
+                "The run has already finished with 'RUN_FINISHED'",
+            );
         }
 
         #[tokio::test]
@@ -743,7 +768,10 @@ mod tests {
                 factory::text_message_end("m1"),
             ])
             .await;
-            assert_validation(&items[1], "Cannot send 'TEXT_MESSAGE_END' event: No active text message found with ID 'm1'");
+            assert_validation(
+                &items[1],
+                "Cannot send 'TEXT_MESSAGE_END' event: No active text message found with ID 'm1'",
+            );
         }
 
         #[tokio::test]
@@ -754,7 +782,10 @@ mod tests {
                 factory::text_message_start("m2"),
             ])
             .await;
-            assert_validation(&items[2], "A text message with ID 'm1' is already in progress");
+            assert_validation(
+                &items[2],
+                "A text message with ID 'm1' is already in progress",
+            );
         }
 
         #[tokio::test]
@@ -793,7 +824,10 @@ mod tests {
                 factory::tool_call_args("tc1", "{}"),
             ])
             .await;
-            assert_validation(&items[1], "Cannot send 'TOOL_CALL_ARGS' event: No active tool call found with ID 'tc1'");
+            assert_validation(
+                &items[1],
+                "Cannot send 'TOOL_CALL_ARGS' event: No active tool call found with ID 'tc1'",
+            );
         }
 
         #[tokio::test]
@@ -803,7 +837,10 @@ mod tests {
                 factory::tool_call_end("tc1"),
             ])
             .await;
-            assert_validation(&items[1], "Cannot send 'TOOL_CALL_END' event: No active tool call found with ID 'tc1'");
+            assert_validation(
+                &items[1],
+                "Cannot send 'TOOL_CALL_END' event: No active tool call found with ID 'tc1'",
+            );
         }
 
         #[tokio::test]
@@ -813,7 +850,10 @@ mod tests {
                 tool_call_start_with_parent("tc1", "m1"),
             ])
             .await;
-            assert_validation(&items[1], "Parent message ID 'm1' does not reference an active text message");
+            assert_validation(
+                &items[1],
+                "Parent message ID 'm1' does not reference an active text message",
+            );
         }
 
         #[tokio::test]
@@ -824,7 +864,10 @@ mod tests {
                 factory::tool_call_start("tc2", "search"),
             ])
             .await;
-            assert_validation(&items[2], "A tool call with ID 'tc1' is already in progress");
+            assert_validation(
+                &items[2],
+                "A tool call with ID 'tc1' is already in progress",
+            );
         }
 
         #[tokio::test]
@@ -983,7 +1026,10 @@ mod tests {
                 factory::step_started("plan"),
             ])
             .await;
-            assert_validation(&items[2], "Step \"plan\" is already active for 'STEP_STARTED'");
+            assert_validation(
+                &items[2],
+                "Step \"plan\" is already active for 'STEP_STARTED'",
+            );
         }
 
         #[tokio::test]
@@ -993,7 +1039,10 @@ mod tests {
                 factory::step_finished("plan"),
             ])
             .await;
-            assert_validation(&items[1], "Cannot send 'STEP_FINISHED' for step \"plan\" that was not started");
+            assert_validation(
+                &items[1],
+                "Cannot send 'STEP_FINISHED' for step \"plan\" that was not started",
+            );
         }
 
         #[tokio::test]
@@ -1004,7 +1053,10 @@ mod tests {
                 factory::run_finished("thread", "run"),
             ])
             .await;
-            assert_validation(&items[2], "Cannot send 'RUN_FINISHED' while steps are still active: plan");
+            assert_validation(
+                &items[2],
+                "Cannot send 'RUN_FINISHED' while steps are still active: plan",
+            );
         }
 
         #[tokio::test]
@@ -1047,7 +1099,10 @@ mod tests {
                 factory::run_finished("thread", "run"),
             ])
             .await;
-            assert_validation(&items[2], "Cannot send 'RUN_FINISHED' while text message 'm1' is still active");
+            assert_validation(
+                &items[2],
+                "Cannot send 'RUN_FINISHED' while text message 'm1' is still active",
+            );
         }
 
         #[tokio::test]
@@ -1058,7 +1113,10 @@ mod tests {
                 factory::run_finished("thread", "run"),
             ])
             .await;
-            assert_validation(&items[2], "Cannot send 'RUN_FINISHED' while tool call 'tc1' is still active");
+            assert_validation(
+                &items[2],
+                "Cannot send 'RUN_FINISHED' while tool call 'tc1' is still active",
+            );
         }
 
         #[tokio::test]
@@ -1069,7 +1127,10 @@ mod tests {
                 factory::run_finished("thread", "run"),
             ])
             .await;
-            assert_validation(&items[2], "Cannot send 'RUN_FINISHED' while reasoning message 'r1' is still active");
+            assert_validation(
+                &items[2],
+                "Cannot send 'RUN_FINISHED' while reasoning message 'r1' is still active",
+            );
         }
 
         #[tokio::test]
@@ -1080,7 +1141,10 @@ mod tests {
                 factory::run_finished("thread", "run"),
             ])
             .await;
-            assert_validation(&items[2], "Cannot send 'RUN_FINISHED' while a thinking step is still active");
+            assert_validation(
+                &items[2],
+                "Cannot send 'RUN_FINISHED' while a thinking step is still active",
+            );
         }
 
         #[tokio::test]
@@ -1091,7 +1155,10 @@ mod tests {
                 tool_call_chunk(Some("tc2"), None),
             ])
             .await;
-            assert_validation(&items[2], "Cannot send 'TOOL_CALL_CHUNK' event: No active tool call found with ID 'tc2'");
+            assert_validation(
+                &items[2],
+                "Cannot send 'TOOL_CALL_CHUNK' event: No active tool call found with ID 'tc2'",
+            );
         }
 
         #[tokio::test]

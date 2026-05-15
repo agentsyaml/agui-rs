@@ -1,5 +1,5 @@
-use ag_ui_core::{Context, Event, Tool};
 use ag_ui_core::types::{Message, RunAgentInput};
+use ag_ui_core::{Context, Event, Tool};
 use serde_json::json;
 
 #[test]
@@ -149,7 +149,10 @@ fn tool_and_context_accept_extra_fields() {
     assert_eq!(context.description, "User preferences");
     assert_eq!(context.value, "{\"theme\":\"dark\"}");
     assert!(serde_json::to_value(tool).unwrap().get("version").is_none());
-    assert!(serde_json::to_value(context).unwrap().get("priority").is_none());
+    assert!(serde_json::to_value(context)
+        .unwrap()
+        .get("priority")
+        .is_none());
 }
 
 #[test]
@@ -209,11 +212,21 @@ fn complex_nested_structures_ignore_extra_fields_at_multiple_levels() {
     assert_eq!(serialized["messages"].as_array().unwrap().len(), 2);
     assert_eq!(serialized["tools"].as_array().unwrap().len(), 1);
     assert_eq!(serialized["context"].as_array().unwrap().len(), 1);
-    assert_eq!(serialized["messages"][1]["toolCalls"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        serialized["messages"][1]["toolCalls"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
     assert!(serialized.get("extraTopLevelProp").is_none());
     assert!(serialized["messages"][0].get("extraUserProp").is_none());
-    assert!(serialized["messages"][1]["toolCalls"][0].get("extraToolCallProp").is_none());
-    assert!(serialized["messages"][1]["toolCalls"][0]["function"].get("extraFunctionProp").is_none());
+    assert!(serialized["messages"][1]["toolCalls"][0]
+        .get("extraToolCallProp")
+        .is_none());
+    assert!(serialized["messages"][1]["toolCalls"][0]["function"]
+        .get("extraFunctionProp")
+        .is_none());
 }
 
 #[test]
@@ -263,7 +276,13 @@ fn legacy_thinking_payloads_deserialize_successfully() {
     .expect("deserialize thinking end");
 
     assert!(matches!(thinking_start, Event::ThinkingStart(_)));
-    assert!(matches!(thinking_text_start, Event::ThinkingTextMessageStart(_)));
-    assert!(matches!(thinking_text_content, Event::ThinkingTextMessageContent(_)));
+    assert!(matches!(
+        thinking_text_start,
+        Event::ThinkingTextMessageStart(_)
+    ));
+    assert!(matches!(
+        thinking_text_content,
+        Event::ThinkingTextMessageContent(_)
+    ));
     assert!(matches!(thinking_end, Event::ThinkingEnd(_)));
 }

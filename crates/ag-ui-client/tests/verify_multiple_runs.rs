@@ -11,7 +11,10 @@ async fn collect(events: Vec<Event>) -> Vec<Result<Event, AgUiError>> {
 fn assert_validation(result: &Result<Event, AgUiError>, expected: &str) {
     match result {
         Err(AgUiError::Validation(message)) => {
-            assert!(message.contains(expected), "expected '{expected}' in '{message}'");
+            assert!(
+                message.contains(expected),
+                "expected '{expected}' in '{message}'"
+            );
         }
         other => panic!("expected validation error, got {other:?}"),
     }

@@ -1,9 +1,11 @@
 #![allow(dead_code)]
 #![allow(unused_imports)]
 
-use ag_ui_client::{get_run_outcome, is_interrupt_expired, ResumeResponse};
 use ag_ui_client::interrupts::build_resume_array;
-use ag_ui_core::{BaseEventFields, Event, Interrupt, ResumeStatus, RunFinishedEvent, RunFinishedOutcome};
+use ag_ui_client::{get_run_outcome, is_interrupt_expired, ResumeResponse};
+use ag_ui_core::{
+    BaseEventFields, Event, Interrupt, ResumeStatus, RunFinishedEvent, RunFinishedOutcome,
+};
 use serde_json::json;
 use std::collections::HashMap;
 
@@ -46,11 +48,19 @@ fn get_run_outcome_covers_legacy_success_and_interrupt_cases() {
         base: BaseEventFields::default(),
     });
 
-    assert_eq!(get_run_outcome(&[legacy]), ag_ui_client::interrupts::RunOutcome::Finished(None));
-    assert_eq!(get_run_outcome(&[success]), ag_ui_client::interrupts::RunOutcome::Finished(Some(RunFinishedOutcome::Success)));
+    assert_eq!(
+        get_run_outcome(&[legacy]),
+        ag_ui_client::interrupts::RunOutcome::Finished(None)
+    );
+    assert_eq!(
+        get_run_outcome(&[success]),
+        ag_ui_client::interrupts::RunOutcome::Finished(Some(RunFinishedOutcome::Success))
+    );
     assert_eq!(
         get_run_outcome(&[interrupt_event]),
-        ag_ui_client::interrupts::RunOutcome::Finished(Some(RunFinishedOutcome::Interrupt { interrupts }))
+        ag_ui_client::interrupts::RunOutcome::Finished(Some(RunFinishedOutcome::Interrupt {
+            interrupts
+        }))
     );
 }
 
@@ -96,7 +106,10 @@ fn interrupt_expiration_honors_missing_past_future_and_injected_now() {
     assert!(!is_interrupt_expired(&unset, "2026-01-01T00:00:00Z"));
     assert!(is_interrupt_expired(&past, "2026-01-01T00:00:00Z"));
     assert!(!is_interrupt_expired(&future, "2026-01-01T00:00:00Z"));
-    assert!(!is_interrupt_expired(&deterministic, "2026-04-22T11:59:00Z"));
+    assert!(!is_interrupt_expired(
+        &deterministic,
+        "2026-04-22T11:59:00Z"
+    ));
     assert!(is_interrupt_expired(&deterministic, "2026-04-22T12:00:01Z"));
 }
 

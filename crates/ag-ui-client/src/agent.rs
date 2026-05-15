@@ -3,7 +3,10 @@ use crate::chunks::expand_chunks;
 use crate::middleware::{MiddlewareChain, MiddlewareInput};
 use crate::subscriber::{AgentSubscriber, NewMessageContext, NewToolCallContext, RunContext};
 use crate::verify::verify_events;
-use ag_ui_core::{AgUiError, Context, Event, Message, Result, RunAgentInput, RunFinishedOutcome, State, Tool, ToolCall};
+use ag_ui_core::{
+    AgUiError, Context, Event, Message, Result, RunAgentInput, RunFinishedOutcome, State, Tool,
+    ToolCall,
+};
 use async_trait::async_trait;
 use futures::{future::BoxFuture, stream::BoxStream, StreamExt};
 use serde_json::Value;
@@ -92,7 +95,11 @@ pub(crate) fn abortable_event_stream(mut stream: EventStream, abort: AbortHandle
 pub trait Agent: Send + Sync {
     async fn run(&self, input: RunAgentInput) -> Result<EventStream>;
 
-    async fn run_cancellable(&self, input: RunAgentInput, abort: AbortHandle) -> Result<EventStream> {
+    async fn run_cancellable(
+        &self,
+        input: RunAgentInput,
+        abort: AbortHandle,
+    ) -> Result<EventStream> {
         if abort.is_aborted() {
             return Err(AgUiError::Cancelled);
         }
@@ -139,7 +146,10 @@ pub struct AgentRunner<A: Agent + 'static> {
 
 impl<A: Agent + 'static> AgentRunner<A> {
     pub fn new(agent: A, config: AgentConfig) -> Self {
-        let thread_id = config.thread_id.clone().unwrap_or_else(|| generate_id("thread"));
+        let thread_id = config
+            .thread_id
+            .clone()
+            .unwrap_or_else(|| generate_id("thread"));
         Self {
             agent: Arc::new(agent),
             middleware: MiddlewareChain::new(),
@@ -164,7 +174,11 @@ impl<A: Agent + 'static> AgentRunner<A> {
         self.run_agent_cancellable(params, AbortHandle::new()).await
     }
 
-    pub async fn run_agent_cancellable(&mut self, params: RunAgentParameters, abort: AbortHandle) -> Result<RunAgentResult> {
+    pub async fn run_agent_cancellable(
+        &mut self,
+        params: RunAgentParameters,
+        abort: AbortHandle,
+    ) -> Result<RunAgentResult> {
         let starting_messages_len = self.messages.len();
         let run_id = params.run_id.clone().unwrap_or_else(|| generate_id("run"));
         let input = RunAgentInput {
@@ -208,7 +222,11 @@ impl<A: Agent + 'static> AgentRunner<A> {
                 as BoxFuture<'static, Result<EventStream>>
         });
 
-        let raw_stream = match self.middleware.run(MiddlewareInput::from(input), terminal).await {
+        let raw_stream = match self
+            .middleware
+            .run(MiddlewareInput::from(input), terminal)
+            .await
+        {
             Ok(stream) => stream,
             Err(err) => {
                 if let Some(subscriber) = &self.subscriber {
@@ -218,7 +236,11 @@ impl<A: Agent + 'static> AgentRunner<A> {
             }
         };
 
-        let pipeline = default_apply_events(verify_events(expand_chunks(raw_stream)), self.messages.clone(), self.state.clone());
+        let pipeline = default_apply_events(
+            verify_events(expand_chunks(raw_stream)),
+            self.messages.clone(),
+            self.state.clone(),
+        );
         let mut pipeline = pipeline.boxed();
         let mut outcome = None;
         let mut announced_tool_call_ids = HashSet::new();
@@ -250,13 +272,17 @@ impl<A: Agent + 'static> AgentRunner<A> {
                         let original_message_id = context.messages[idx].id().to_string();
                         let message_result = {
                             let message = &context.messages[idx];
-                            let new_message_context = NewMessageContext { run: &context, message };
+                            let new_message_context = NewMessageContext {
+                                run: &context,
+                                message,
+                            };
                             subscriber.on_new_message(&new_message_context).await
                         };
 
                         match message_result {
                             Ok(Some(replacement)) => {
-                                message_replacements.insert(original_message_id, replacement.clone());
+                                message_replacements
+                                    .insert(original_message_id, replacement.clone());
                                 context.messages[idx] = replacement;
                             }
                             Ok(None) => {}
@@ -272,7 +298,9 @@ impl<A: Agent + 'static> AgentRunner<A> {
 
                 for message_idx in 0..context.messages.len() {
                     let tool_call_count = match &context.messages[message_idx] {
-                        Message::Assistant(message) => message.tool_calls.as_ref().map_or(0, Vec::len),
+                        Message::Assistant(message) => {
+                            message.tool_calls.as_ref().map_or(0, Vec::len)
+                        }
                         _ => 0,
                     };
 
@@ -305,7 +333,10 @@ impl<A: Agent + 'static> AgentRunner<A> {
                             let Some(tool_call) = tool_call else {
                                 continue;
                             };
-                            let new_tool_call_context = NewToolCallContext { run: &context, tool_call };
+                            let new_tool_call_context = NewToolCallContext {
+                                run: &context,
+                                tool_call,
+                            };
                             subscriber.on_new_tool_call(&new_tool_call_context).await
                         };
 
@@ -313,7 +344,9 @@ impl<A: Agent + 'static> AgentRunner<A> {
                             Ok(Some(replacement)) => {
                                 tool_call_replacements
                                     .insert(original_tool_call_id.clone(), replacement.clone());
-                                if let Message::Assistant(message) = &mut context.messages[message_idx] {
+                                if let Message::Assistant(message) =
+                                    &mut context.messages[message_idx]
+                                {
                                     if let Some(tool_calls) = &mut message.tool_calls {
                                         if let Some(tool_call) = tool_calls.get_mut(tool_call_idx) {
                                             *tool_call = replacement.clone();
@@ -349,22 +382,52 @@ impl<A: Agent + 'static> AgentRunner<A> {
                 subscriber.on_event(&context, &applied.event).await;
 
                 match &applied.event {
-                    Event::TextMessageStart(event) => subscriber.on_text_message_start(&context, &event.message_id).await,
-                    Event::TextMessageContent(event) => subscriber.on_text_message_content(&context, &event.message_id, &event.delta).await,
-                    Event::TextMessageEnd(event) => subscriber.on_text_message_end(&context, &event.message_id).await,
-                    Event::ToolCallStart(event) => {
-                        subscriber.on_tool_call_start(&context, &event.tool_call_id, &event.tool_call_name).await
+                    Event::TextMessageStart(event) => {
+                        subscriber
+                            .on_text_message_start(&context, &event.message_id)
+                            .await
                     }
-                    Event::ToolCallArgs(event) => subscriber.on_tool_call_args(&context, &event.tool_call_id, &event.delta).await,
-                    Event::ToolCallEnd(event) => subscriber.on_tool_call_end(&context, &event.tool_call_id).await,
+                    Event::TextMessageContent(event) => {
+                        subscriber
+                            .on_text_message_content(&context, &event.message_id, &event.delta)
+                            .await
+                    }
+                    Event::TextMessageEnd(event) => {
+                        subscriber
+                            .on_text_message_end(&context, &event.message_id)
+                            .await
+                    }
+                    Event::ToolCallStart(event) => {
+                        subscriber
+                            .on_tool_call_start(
+                                &context,
+                                &event.tool_call_id,
+                                &event.tool_call_name,
+                            )
+                            .await
+                    }
+                    Event::ToolCallArgs(event) => {
+                        subscriber
+                            .on_tool_call_args(&context, &event.tool_call_id, &event.delta)
+                            .await
+                    }
+                    Event::ToolCallEnd(event) => {
+                        subscriber
+                            .on_tool_call_end(&context, &event.tool_call_id)
+                            .await
+                    }
                     Event::ToolCallResult(event) => {
-                        subscriber.on_tool_call_result(&context, &event.tool_call_id, &event.content).await
+                        subscriber
+                            .on_tool_call_result(&context, &event.tool_call_id, &event.content)
+                            .await
                     }
                     _ => {}
                 }
 
                 if previous_messages != context.messages {
-                    subscriber.on_messages_changed(&context, &context.messages).await;
+                    subscriber
+                        .on_messages_changed(&context, &context.messages)
+                        .await;
                 }
                 if previous_state != context.state {
                     subscriber.on_state_changed(&context, &context.state).await;
@@ -405,7 +468,10 @@ fn apply_message_replacements(messages: &mut [Message], replacements: &HashMap<S
     }
 }
 
-fn apply_tool_call_replacements(messages: &mut [Message], replacements: &HashMap<String, ToolCall>) {
+fn apply_tool_call_replacements(
+    messages: &mut [Message],
+    replacements: &HashMap<String, ToolCall>,
+) {
     for message in messages.iter_mut() {
         let Message::Assistant(message) = message else {
             continue;
@@ -439,7 +505,9 @@ mod tests {
     #[async_trait]
     impl Agent for FakeAgent {
         async fn run(&self, _input: RunAgentInput) -> Result<BoxStream<'static, Result<Event>>> {
-            Ok(Box::pin(stream::iter(self.events.clone().into_iter().map(Ok))))
+            Ok(Box::pin(stream::iter(
+                self.events.clone().into_iter().map(Ok),
+            )))
         }
     }
 
@@ -449,7 +517,11 @@ mod tests {
 
     #[async_trait]
     impl Middleware for PassthroughMiddleware {
-        async fn run(&self, input: MiddlewareInput, next: NextFn) -> std::result::Result<EventStream, AgUiError> {
+        async fn run(
+            &self,
+            input: MiddlewareInput,
+            next: NextFn,
+        ) -> std::result::Result<EventStream, AgUiError> {
             *self.invoked.lock().expect("invoked lock") = true;
             next(input).await
         }
@@ -516,7 +588,10 @@ mod tests {
         };
 
         let mut runner = AgentRunner::new(agent, AgentConfig::default());
-        let result = runner.run_agent(RunAgentParameters::default()).await.expect("run should succeed");
+        let result = runner
+            .run_agent(RunAgentParameters::default())
+            .await
+            .expect("run should succeed");
 
         assert_eq!(result.thread_id, "thread-1");
         assert_eq!(result.run_id, "run-1");
@@ -557,7 +632,10 @@ mod tests {
         };
 
         let mut runner = AgentRunner::new(agent, AgentConfig::default()).with_middleware(chain);
-        let result = runner.run_agent(RunAgentParameters::default()).await.expect("run should succeed");
+        let result = runner
+            .run_agent(RunAgentParameters::default())
+            .await
+            .expect("run should succeed");
 
         assert!(*invoked.lock().expect("invoked lock"));
         assert_eq!(result.new_messages.len(), 1);
@@ -586,8 +664,12 @@ mod tests {
         };
 
         let subscriber: Arc<dyn AgentSubscriber> = Arc::new(ReplaceMessageSubscriber);
-        let mut runner = AgentRunner::new(agent, AgentConfig::default()).with_subscriber(subscriber);
-        let result = runner.run_agent(RunAgentParameters::default()).await.expect("run should succeed");
+        let mut runner =
+            AgentRunner::new(agent, AgentConfig::default()).with_subscriber(subscriber);
+        let result = runner
+            .run_agent(RunAgentParameters::default())
+            .await
+            .expect("run should succeed");
 
         match &result.new_messages[0] {
             Message::Assistant(message) => assert_eq!(message.content.as_deref(), Some("replaced")),
@@ -614,8 +696,12 @@ mod tests {
         };
 
         let subscriber: Arc<dyn AgentSubscriber> = Arc::new(ReplaceToolCallSubscriber);
-        let mut runner = AgentRunner::new(agent, AgentConfig::default()).with_subscriber(subscriber);
-        let result = runner.run_agent(RunAgentParameters::default()).await.expect("run should succeed");
+        let mut runner =
+            AgentRunner::new(agent, AgentConfig::default()).with_subscriber(subscriber);
+        let result = runner
+            .run_agent(RunAgentParameters::default())
+            .await
+            .expect("run should succeed");
 
         let Message::Assistant(message) = &result.new_messages[0] else {
             panic!("expected assistant message");

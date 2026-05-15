@@ -5,12 +5,15 @@
 mod apply;
 #[path = "../src/chunks.rs"]
 mod chunks;
-#[path = "../src/verify.rs"]
-mod verify;
 #[path = "../src/middleware.rs"]
 mod middleware;
+#[path = "../src/verify.rs"]
+mod verify;
 
-use ag_ui_core::{BaseEventFields, Event, RunFinishedEvent, RunAgentInput, RunFinishedOutcome, TextMessageChunkEvent, TextMessageRole};
+use ag_ui_core::{
+    BaseEventFields, Event, RunAgentInput, RunFinishedEvent, RunFinishedOutcome,
+    TextMessageChunkEvent, TextMessageRole,
+};
 use async_trait::async_trait;
 use futures::{stream, StreamExt};
 use middleware::Middleware as _;
@@ -56,7 +59,10 @@ impl middleware::Middleware for StateTrackingMiddleware {
             })
             .collect();
 
-        let events = applied.into_iter().map(|applied| Ok(applied.event)).collect::<Vec<_>>();
+        let events = applied
+            .into_iter()
+            .map(|applied| Ok(applied.event))
+            .collect::<Vec<_>>();
         Ok(Box::pin(stream::iter(events)))
     }
 }
@@ -71,7 +77,10 @@ async fn captures_state_after_each_expanded_event() {
     let terminal: middleware::TerminalFn = Arc::new(|input| {
         Box::pin(async move {
             Ok(Box::pin(stream::iter(vec![
-                Ok(ag_ui_core::factory::run_started(&input.run_agent_input.thread_id, &input.run_agent_input.run_id)),
+                Ok(ag_ui_core::factory::run_started(
+                    &input.run_agent_input.thread_id,
+                    &input.run_agent_input.run_id,
+                )),
                 Ok(Event::TextMessageChunk(TextMessageChunkEvent {
                     message_id: Some("message-1".into()),
                     role: Some(TextMessageRole::Assistant),

@@ -34,7 +34,10 @@ pub use subscriber::{
     AgentSubscriber, EventContext, RunContext, RunFailedContext, RunFinishedContext,
     TextContentContext, TextEndContext, ToolCallArgsContext,
 };
-pub use transform::{detect_stream_format, parse_sse_stream, StreamFormat, AGUI_MEDIA_TYPE_PROTOBUF, AGUI_MEDIA_TYPE_SSE};
+pub use transform::{
+    detect_stream_format, parse_sse_stream, StreamFormat, AGUI_MEDIA_TYPE_PROTOBUF,
+    AGUI_MEDIA_TYPE_SSE,
+};
 pub use verify::verify_events;
 
 pub use ag_ui_core::{Event, Message, RunAgentInput, State};

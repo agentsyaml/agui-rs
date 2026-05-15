@@ -95,7 +95,9 @@ pub fn apply_event(state: &mut ApplyState, event: &Event) -> Result<()> {
             }));
             let _ = event.role.unwrap_or(ToolResultRole::Tool);
         }
-        Event::MessagesSnapshot(event) => apply_messages_snapshot(&mut state.messages, &event.messages),
+        Event::MessagesSnapshot(event) => {
+            apply_messages_snapshot(&mut state.messages, &event.messages)
+        }
         Event::StateSnapshot(event) => {
             state.state = event.snapshot.clone();
         }
@@ -190,7 +192,10 @@ fn append_message_content(message: &mut Message, delta: &str) -> Result<()> {
     match message {
         Message::Developer(message) => message.content.push_str(delta),
         Message::System(message) => message.content.push_str(delta),
-        Message::Assistant(message) => message.content.get_or_insert_with(String::new).push_str(delta),
+        Message::Assistant(message) => message
+            .content
+            .get_or_insert_with(String::new)
+            .push_str(delta),
         Message::User(message) => match &mut message.content {
             UserMessageContent::Text(content) => content.push_str(delta),
             UserMessageContent::Parts(_) => {
@@ -288,7 +293,10 @@ fn apply_activity_snapshot(messages: &mut Vec<Message>, event: &ActivitySnapshot
         content: event.content.clone(),
     });
 
-    if let Some(index) = messages.iter().position(|message| message.id() == event.message_id) {
+    if let Some(index) = messages
+        .iter()
+        .position(|message| message.id() == event.message_id)
+    {
         match &messages[index] {
             Message::Activity(_) if event.replace => messages[index] = activity_message,
             Message::Activity(_) => {}
@@ -302,7 +310,10 @@ fn apply_activity_snapshot(messages: &mut Vec<Message>, event: &ActivitySnapshot
 }
 
 fn apply_activity_delta(messages: &mut [Message], event: &ActivityDeltaEvent) -> Result<()> {
-    let Some(index) = messages.iter().position(|message| message.id() == event.message_id) else {
+    let Some(index) = messages
+        .iter()
+        .position(|message| message.id() == event.message_id)
+    else {
         return Ok(());
     };
 
@@ -348,7 +359,10 @@ fn apply_reasoning_encrypted_value(
             }
         }
         ReasoningEncryptedValueSubtype::Message => {
-            if let Some(message) = messages.iter_mut().find(|message| message.id() == entity_id) {
+            if let Some(message) = messages
+                .iter_mut()
+                .find(|message| message.id() == entity_id)
+            {
                 set_message_encrypted_value(message, encrypted_value)?;
             }
         }
@@ -435,14 +449,17 @@ fn assistant_message_mut(message: &mut Message) -> Result<&mut AssistantMessage>
     }
 }
 
-fn find_tool_call_mut<'a>(messages: &'a mut [Message], tool_call_id: &str) -> Result<&'a mut ToolCall> {
+fn find_tool_call_mut<'a>(
+    messages: &'a mut [Message],
+    tool_call_id: &str,
+) -> Result<&'a mut ToolCall> {
     for message in messages {
         if let Message::Assistant(assistant) = message {
-            if let Some(tool_call) = assistant
-                .tool_calls
-                .as_mut()
-                .and_then(|tool_calls| tool_calls.iter_mut().find(|tool_call| tool_call.id == tool_call_id))
-            {
+            if let Some(tool_call) = assistant.tool_calls.as_mut().and_then(|tool_calls| {
+                tool_calls
+                    .iter_mut()
+                    .find(|tool_call| tool_call.id == tool_call_id)
+            }) {
                 return Ok(tool_call);
             }
         }
@@ -480,12 +497,16 @@ mod tests {
     use serde_json::json;
 
     async fn collect(events: Vec<Event>) -> Vec<AppliedEvent> {
-        default_apply_events(stream::iter(events.into_iter().map(Ok)), Vec::new(), Value::Null)
-            .collect::<Vec<_>>()
-            .await
-            .into_iter()
-            .collect::<Result<Vec<_>>>()
-            .expect("apply stream should succeed")
+        default_apply_events(
+            stream::iter(events.into_iter().map(Ok)),
+            Vec::new(),
+            Value::Null,
+        )
+        .collect::<Vec<_>>()
+        .await
+        .into_iter()
+        .collect::<Result<Vec<_>>>()
+        .expect("apply stream should succeed")
     }
 
     fn apply_all(events: Vec<Event>) -> ApplyState {
@@ -521,17 +542,18 @@ mod tests {
         use super::*;
         use ag_ui_core::{
             ReasoningEncryptedValueEvent, ReasoningMessageContentEvent, ReasoningMessageEndEvent,
-            ReasoningMessageRole, ReasoningMessageStartEvent, ThinkingEndEvent,
-            ThinkingStartEvent,
+            ReasoningMessageRole, ReasoningMessageStartEvent, ThinkingEndEvent, ThinkingStartEvent,
         };
 
         #[tokio::test]
         async fn creates_reasoning_message_on_start() {
-            let items = collect(vec![Event::ReasoningMessageStart(ReasoningMessageStartEvent {
-                message_id: "r1".into(),
-                role: ReasoningMessageRole::Reasoning,
-                base: ag_ui_core::BaseEventFields::default(),
-            })])
+            let items = collect(vec![Event::ReasoningMessageStart(
+                ReasoningMessageStartEvent {
+                    message_id: "r1".into(),
+                    role: ReasoningMessageRole::Reasoning,
+                    base: ag_ui_core::BaseEventFields::default(),
+                },
+            )])
             .await;
 
             assert!(matches!(items[0].messages[0], Message::Reasoning(_)));
@@ -814,7 +836,9 @@ mod tests {
                     snapshot: json!({"count": 1}),
                     base: ag_ui_core::BaseEventFields::default(),
                 }),
-                ag_ui_core::factory::state_delta(vec![json!({"op": "replace", "path": "/count", "value": 2})]),
+                ag_ui_core::factory::state_delta(vec![
+                    json!({"op": "replace", "path": "/count", "value": 2}),
+                ]),
             ]);
 
             assert_eq!(state.state, json!({"count": 2}));
@@ -866,15 +890,21 @@ mod tests {
         async fn apply_event_updates_both_messages_and_state() {
             let mut state = ApplyState::default();
 
-            apply_event(&mut state, &Event::TextMessageStart(ag_ui_core::TextMessageStartEvent {
-                message_id: "m1".into(),
-                role: TextMessageRole::Assistant,
-                name: None,
-                base: ag_ui_core::BaseEventFields::default(),
-            }))
+            apply_event(
+                &mut state,
+                &Event::TextMessageStart(ag_ui_core::TextMessageStartEvent {
+                    message_id: "m1".into(),
+                    role: TextMessageRole::Assistant,
+                    name: None,
+                    base: ag_ui_core::BaseEventFields::default(),
+                }),
+            )
             .expect("start applies");
-            apply_event(&mut state, &ag_ui_core::factory::text_message_content("m1", "hello"))
-                .expect("content applies");
+            apply_event(
+                &mut state,
+                &ag_ui_core::factory::text_message_content("m1", "hello"),
+            )
+            .expect("content applies");
             apply_event(
                 &mut state,
                 &Event::StateSnapshot(StateSnapshotEvent {
@@ -886,7 +916,9 @@ mod tests {
 
             assert_eq!(state.state, json!({"status": "ok"}));
             match &state.messages[0] {
-                Message::Assistant(message) => assert_eq!(message.content.as_deref(), Some("hello")),
+                Message::Assistant(message) => {
+                    assert_eq!(message.content.as_deref(), Some("hello"))
+                }
                 _ => panic!("expected assistant message"),
             }
         }

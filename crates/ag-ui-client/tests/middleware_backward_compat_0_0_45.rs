@@ -17,7 +17,9 @@ async fn run(events: Vec<Event>) -> Vec<Event> {
     let middleware = middleware::backward_compat::BackwardCompat0_0_45;
     let terminal: middleware::TerminalFn = Arc::new(move |_input| {
         let events = events.clone();
-        Box::pin(async move { Ok(Box::pin(stream::iter(events.into_iter().map(Ok))) as middleware::EventStream) })
+        Box::pin(async move {
+            Ok(Box::pin(stream::iter(events.into_iter().map(Ok))) as middleware::EventStream)
+        })
     });
 
     middleware
@@ -126,10 +128,7 @@ async fn transforms_complete_thinking_flow_and_keeps_ids_stable() {
     .await;
 
     assert_eq!(
-        events
-            .iter()
-            .map(Event::event_type)
-            .collect::<Vec<_>>(),
+        events.iter().map(Event::event_type).collect::<Vec<_>>(),
         vec![
             ag_ui_core::EventType::ReasoningStart,
             ag_ui_core::EventType::ReasoningMessageStart,
@@ -149,7 +148,9 @@ async fn transforms_complete_thinking_flow_and_keeps_ids_stable() {
         other => panic!("expected reasoning message start, got {other:?}"),
     };
     assert_ne!(reasoning_id, reasoning_message_id);
-    assert!(events.iter().any(|event| matches!(event, Event::ReasoningEnd(end) if end.message_id == reasoning_id)));
+    assert!(events
+        .iter()
+        .any(|event| matches!(event, Event::ReasoningEnd(end) if end.message_id == reasoning_id)));
     assert!(events.iter().any(|event| matches!(event, Event::ReasoningMessageEnd(end) if end.message_id == reasoning_message_id)));
 }
 

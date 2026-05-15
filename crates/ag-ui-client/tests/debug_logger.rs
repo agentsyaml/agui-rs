@@ -32,12 +32,18 @@ fn debug_logger_respects_env_var_and_renders_without_panicking() {
 
     for truthy in ["1", "true", "yes", "on", "debug"] {
         std::env::set_var("AG_UI_DEBUG", truthy);
-        assert!(DebugLogger::new("agent").enabled(), "expected {truthy} to enable logging");
+        assert!(
+            DebugLogger::new("agent").enabled(),
+            "expected {truthy} to enable logging"
+        );
     }
 
     for falsey in ["", "0", "false", "off", "no"] {
         std::env::set_var("AG_UI_DEBUG", falsey);
-        assert!(!DebugLogger::new("agent").enabled(), "expected {falsey:?} to disable logging");
+        assert!(
+            !DebugLogger::new("agent").enabled(),
+            "expected {falsey:?} to disable logging"
+        );
     }
 
     std::env::set_var("AG_UI_DEBUG", "1");

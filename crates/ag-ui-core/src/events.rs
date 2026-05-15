@@ -630,10 +630,7 @@ pub mod factory {
         })
     }
 
-    pub fn text_message_content(
-        message_id: impl Into<String>,
-        delta: impl Into<String>,
-    ) -> Event {
+    pub fn text_message_content(message_id: impl Into<String>, delta: impl Into<String>) -> Event {
         Event::TextMessageContent(TextMessageContentEvent {
             message_id: message_id.into(),
             delta: delta.into(),
@@ -970,8 +967,7 @@ mod tests {
     #[test]
     fn user_message_content_accepts_string_or_parts() {
         use crate::types::*;
-        let s: UserMessageContent =
-            serde_json::from_value(json!("plain text")).unwrap();
+        let s: UserMessageContent = serde_json::from_value(json!("plain text")).unwrap();
         assert!(matches!(s, UserMessageContent::Text(_)));
         let p: UserMessageContent = serde_json::from_value(json!([
             {"type": "text", "text": "hi"}

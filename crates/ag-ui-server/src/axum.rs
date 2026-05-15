@@ -63,14 +63,17 @@ async fn run_agent<H: RunHandler>(
 
     let stream = match handler.handle(input).await {
         Ok(stream) => stream,
-        Err(error) => return (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response(),
+        Err(error) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response()
+        }
     };
 
     let mut response = Response::new(sse_body(stream, encoder));
     *response.status_mut() = StatusCode::OK;
-    response
-        .headers_mut()
-        .insert(header::CONTENT_TYPE, HeaderValue::from_static(AGUI_MEDIA_TYPE_SSE));
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static(AGUI_MEDIA_TYPE_SSE),
+    );
     response
         .headers_mut()
         .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));

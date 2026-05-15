@@ -20,11 +20,10 @@ use async_trait::async_trait;
 use serde_json::{json, Value};
 use std::sync::{Arc, Mutex};
 use subscriber_impl::{
-    ActivityDeltaContext, ActivitySnapshotContext, AgentSubscriber, EventContext,
-    InterruptContext, NewMessageContext, NewToolCallContext, ReasoningContentContext,
-    ReasoningEndContext, RunContext, RunFailedContext, RunFinishedContext,
-    TextContentContext, TextEndContext, ToolCallArgsContext, ToolCallEndContext,
-    ToolCallResultContext,
+    ActivityDeltaContext, ActivitySnapshotContext, AgentSubscriber, EventContext, InterruptContext,
+    NewMessageContext, NewToolCallContext, ReasoningContentContext, ReasoningEndContext,
+    RunContext, RunFailedContext, RunFinishedContext, TextContentContext, TextEndContext,
+    ToolCallArgsContext, ToolCallEndContext, ToolCallResultContext,
 };
 
 fn run_context() -> RunContext {
@@ -450,9 +449,13 @@ async fn default_trait_methods_cover_all_public_callbacks() {
     subscriber.on_run_failed(&run, &error).await;
     subscriber.on_event(&run, &event).await;
     subscriber.on_text_message_start(&run, "msg-1").await;
-    subscriber.on_text_message_content(&run, "msg-1", "hello").await;
+    subscriber
+        .on_text_message_content(&run, "msg-1", "hello")
+        .await;
     subscriber.on_text_message_end(&run, "msg-1").await;
-    subscriber.on_tool_call_start(&run, "call-1", "search").await;
+    subscriber
+        .on_tool_call_start(&run, "call-1", "search")
+        .await;
     subscriber.on_tool_call_args(&run, "call-1", "{}").await;
     subscriber.on_tool_call_end(&run, "call-1").await;
     subscriber.on_tool_call_result(&run, "call-1", "done").await;

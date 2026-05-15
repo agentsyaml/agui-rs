@@ -188,6 +188,9 @@ mod debug_logger_tests {
         };
         assert_eq!(logger.render_log("hello"), "[agent] hello");
         assert!(logger.render_event(&run_event()).contains("RUN_STARTED"));
-        assert_eq!(logger.render_error(&AgUiError::other("boom")), "[agent] error: boom");
+        assert_eq!(
+            logger.render_error(&AgUiError::other("boom")),
+            "[agent] error: boom"
+        );
     }
 }

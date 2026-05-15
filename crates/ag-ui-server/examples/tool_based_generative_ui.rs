@@ -13,8 +13,8 @@
 
 use ag_ui_core::types::{AssistantMessage, ToolMessage};
 use ag_ui_core::{
-    factory, AgUiError, Event, FunctionCall, Message, MessagesSnapshotEvent, Result,
-    RunAgentInput, ToolCall, ToolCallKind, UserMessageContent,
+    factory, AgUiError, Event, FunctionCall, Message, MessagesSnapshotEvent, Result, RunAgentInput,
+    ToolCall, ToolCallKind, UserMessageContent,
 };
 use ag_ui_server::{agui_router, channel, RunHandler};
 use futures::stream::BoxStream;
@@ -27,13 +27,17 @@ impl RunHandler for ToolBasedGenerativeUiHandler {
     async fn handle(&self, input: RunAgentInput) -> Result<BoxStream<'static, Result<Event>>> {
         let (emitter, stream) = channel(32);
 
-        let last_user_text = input.messages.iter().rev().find_map(|message| match message {
-            Message::User(user) => match &user.content {
-                UserMessageContent::Text(text) => Some(text.clone()),
+        let last_user_text = input
+            .messages
+            .iter()
+            .rev()
+            .find_map(|message| match message {
+                Message::User(user) => match &user.content {
+                    UserMessageContent::Text(text) => Some(text.clone()),
+                    _ => None,
+                },
                 _ => None,
-            },
-            _ => None,
-        });
+            });
 
         let thread_id = input.thread_id.clone();
         let run_id = input.run_id.clone();

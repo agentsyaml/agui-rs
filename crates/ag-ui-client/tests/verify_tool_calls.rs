@@ -11,7 +11,10 @@ async fn collect(events: Vec<Event>) -> Vec<Result<Event>> {
 fn assert_validation(result: &Result<Event>, expected: &str) {
     match result {
         Err(AgUiError::Validation(message)) => {
-            assert!(message.contains(expected), "expected '{expected}' in '{message}'");
+            assert!(
+                message.contains(expected),
+                "expected '{expected}' in '{message}'"
+            );
         }
         other => panic!("expected validation error, got {other:?}"),
     }
@@ -67,7 +70,10 @@ async fn tool_call_args_before_start_errors() {
     ])
     .await;
 
-    assert_validation(&out[1], "Cannot send 'TOOL_CALL_ARGS' event: No active tool call found with ID 'tc1'");
+    assert_validation(
+        &out[1],
+        "Cannot send 'TOOL_CALL_ARGS' event: No active tool call found with ID 'tc1'",
+    );
 }
 
 #[tokio::test]
@@ -78,7 +84,10 @@ async fn tool_call_end_before_start_errors() {
     ])
     .await;
 
-    assert_validation(&out[1], "Cannot send 'TOOL_CALL_END' event: No active tool call found with ID 'tc1'");
+    assert_validation(
+        &out[1],
+        "Cannot send 'TOOL_CALL_END' event: No active tool call found with ID 'tc1'",
+    );
 }
 
 #[tokio::test]
@@ -102,7 +111,10 @@ async fn mismatched_tool_call_args_id_errors() {
     ])
     .await;
 
-    assert_validation(&out[2], "Cannot send 'TOOL_CALL_ARGS' event: No active tool call found with ID 'tc2'");
+    assert_validation(
+        &out[2],
+        "Cannot send 'TOOL_CALL_ARGS' event: No active tool call found with ID 'tc2'",
+    );
 }
 
 #[tokio::test]
@@ -113,7 +125,10 @@ async fn tool_call_start_with_non_active_parent_message_errors() {
     ])
     .await;
 
-    assert_validation(&out[1], "Parent message ID 'm1' does not reference an active text message");
+    assert_validation(
+        &out[1],
+        "Parent message ID 'm1' does not reference an active text message",
+    );
 }
 
 #[tokio::test]
@@ -125,7 +140,10 @@ async fn tool_call_start_with_mismatched_active_parent_message_errors() {
     ])
     .await;
 
-    assert_validation(&out[2], "Parent message ID 'm2' must match the active text message ID 'm1'");
+    assert_validation(
+        &out[2],
+        "Parent message ID 'm2' must match the active text message ID 'm1'",
+    );
 }
 
 #[tokio::test]
@@ -138,7 +156,9 @@ async fn raw_custom_state_messages_and_steps_inside_tool_call_pass() {
         raw_event(),
         custom_event(),
         factory::state_snapshot(json!({})),
-        factory::state_delta(vec![json!({ "op": "add", "path": "/result", "value": "success" })]),
+        factory::state_delta(vec![
+            json!({ "op": "add", "path": "/result", "value": "success" }),
+        ]),
         messages_snapshot_event(),
         factory::step_finished("test-step"),
         factory::tool_call_end("tc1"),
@@ -236,5 +256,8 @@ async fn run_finished_with_active_tool_call_errors() {
     ])
     .await;
 
-    assert_validation(&out[2], "Cannot send 'RUN_FINISHED' while tool call 'tc1' is still active");
+    assert_validation(
+        &out[2],
+        "Cannot send 'RUN_FINISHED' while tool call 'tc1' is still active",
+    );
 }

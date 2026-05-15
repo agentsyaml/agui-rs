@@ -11,7 +11,9 @@ struct FakeAgent {
 #[async_trait]
 impl Agent for FakeAgent {
     async fn run(&self, _input: RunAgentInput) -> Result<BoxStream<'static, Result<Event>>> {
-        Ok(Box::pin(stream::iter(self.events.clone().into_iter().map(Ok))))
+        Ok(Box::pin(stream::iter(
+            self.events.clone().into_iter().map(Ok),
+        )))
     }
 }
 
@@ -32,7 +34,10 @@ async fn on_new_message_replaces_message_in_place() {
     };
     let mut runner = AgentRunner::new(agent, AgentConfig::default());
 
-    let result = runner.run_agent(RunAgentParameters::default()).await.expect("run succeeds");
+    let result = runner
+        .run_agent(RunAgentParameters::default())
+        .await
+        .expect("run succeeds");
 
     assert_eq!(result.new_messages.len(), 1);
     match &result.new_messages[0] {
@@ -57,7 +62,10 @@ async fn on_new_tool_call_mutation_path_replaces_tool_call_in_place() {
     };
     let mut runner = AgentRunner::new(agent, AgentConfig::default());
 
-    let result = runner.run_agent(RunAgentParameters::default()).await.expect("run succeeds");
+    let result = runner
+        .run_agent(RunAgentParameters::default())
+        .await
+        .expect("run succeeds");
 
     let Message::Assistant(message) = &result.new_messages[0] else {
         panic!("expected assistant message");
@@ -89,7 +97,10 @@ async fn message_and_tool_call_outputs_share_same_assistant_message() {
     };
     let mut runner = AgentRunner::new(agent, AgentConfig::default());
 
-    let result = runner.run_agent(RunAgentParameters::default()).await.expect("run succeeds");
+    let result = runner
+        .run_agent(RunAgentParameters::default())
+        .await
+        .expect("run succeeds");
 
     assert_eq!(result.new_messages.len(), 1);
     let Message::Assistant(message) = &result.new_messages[0] else {
@@ -132,7 +143,10 @@ async fn new_messages_are_appended_after_initial_messages() {
         },
     );
 
-    let result = runner.run_agent(RunAgentParameters::default()).await.expect("run succeeds");
+    let result = runner
+        .run_agent(RunAgentParameters::default())
+        .await
+        .expect("run succeeds");
 
     assert_eq!(result.new_messages.len(), 1);
     assert_eq!(result.new_messages[0].id(), "m1");

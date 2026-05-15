@@ -1,9 +1,9 @@
 use ag_ui_core::{
     BaseEventFields, CustomEvent, Event, ReasoningEndEvent, ReasoningMessageContentEvent,
     ReasoningMessageEndEvent, ReasoningMessageRole, ReasoningMessageStartEvent,
-    ReasoningStartEvent, RunErrorEvent, StateSnapshotEvent, TextMessageEndEvent,
-    TextMessageRole, TextMessageStartEvent, ToolCallArgsEvent, ToolCallEndEvent,
-    ToolCallResultEvent, ToolCallStartEvent,
+    ReasoningStartEvent, RunErrorEvent, StateSnapshotEvent, TextMessageEndEvent, TextMessageRole,
+    TextMessageStartEvent, ToolCallArgsEvent, ToolCallEndEvent, ToolCallResultEvent,
+    ToolCallStartEvent,
 };
 use async_stream::try_stream;
 use futures::{Stream, StreamExt};
@@ -316,11 +316,11 @@ mod tests {
 
     use super::{
         convert_legacy_events, LegacyActionExecutionArgs, LegacyActionExecutionEnd,
-        LegacyActionExecutionResult, LegacyActionExecutionStart, LegacyAgentStateMessage, LegacyEvent,
-        LegacyMetaEvent, LegacyMetaEventName, LegacyRunError, LegacyTextMessageContent,
-        LegacyTextMessageEnd, LegacyTextMessageStart, LegacyThinkingEnd,
-        LegacyThinkingTextMessageContent, LegacyThinkingTextMessageEnd,
-        LegacyThinkingTextMessageStart, LegacyThinkingStart,
+        LegacyActionExecutionResult, LegacyActionExecutionStart, LegacyAgentStateMessage,
+        LegacyEvent, LegacyMetaEvent, LegacyMetaEventName, LegacyRunError,
+        LegacyTextMessageContent, LegacyTextMessageEnd, LegacyTextMessageStart, LegacyThinkingEnd,
+        LegacyThinkingStart, LegacyThinkingTextMessageContent, LegacyThinkingTextMessageEnd,
+        LegacyThinkingTextMessageStart,
     };
 
     async fn collect(events: Vec<LegacyEvent>) -> Vec<crate::Result<ag_ui_core::Event>> {
@@ -345,9 +345,15 @@ mod tests {
         ])
         .await;
 
-        assert!(matches!(&events[0], Ok(event) if *event == ag_ui_core::factory::text_message_start("m1")));
-        assert!(matches!(&events[1], Ok(event) if *event == ag_ui_core::factory::text_message_content("m1", "hello")));
-        assert!(matches!(&events[2], Ok(event) if *event == ag_ui_core::factory::text_message_end("m1")));
+        assert!(
+            matches!(&events[0], Ok(event) if *event == ag_ui_core::factory::text_message_start("m1"))
+        );
+        assert!(
+            matches!(&events[1], Ok(event) if *event == ag_ui_core::factory::text_message_content("m1", "hello"))
+        );
+        assert!(
+            matches!(&events[2], Ok(event) if *event == ag_ui_core::factory::text_message_end("m1"))
+        );
     }
 
     #[tokio::test]
@@ -373,15 +379,23 @@ mod tests {
         ])
         .await;
 
-        assert!(matches!(&events[0], Ok(event) if *event == ag_ui_core::Event::ToolCallStart(ag_ui_core::ToolCallStartEvent {
-            tool_call_id: "tc1".into(),
-            tool_call_name: "search".into(),
-            parent_message_id: Some("m1".into()),
-            base: BaseEventFields::default(),
-        })));
-        assert!(matches!(&events[1], Ok(event) if *event == ag_ui_core::factory::tool_call_args("tc1", "{}")));
-        assert!(matches!(&events[2], Ok(event) if *event == ag_ui_core::factory::tool_call_end("tc1")));
-        assert!(matches!(&events[3], Ok(ag_ui_core::Event::ToolCallResult(event)) if event.tool_call_id == "tc1" && event.content == "ok"));
+        assert!(
+            matches!(&events[0], Ok(event) if *event == ag_ui_core::Event::ToolCallStart(ag_ui_core::ToolCallStartEvent {
+                tool_call_id: "tc1".into(),
+                tool_call_name: "search".into(),
+                parent_message_id: Some("m1".into()),
+                base: BaseEventFields::default(),
+            }))
+        );
+        assert!(
+            matches!(&events[1], Ok(event) if *event == ag_ui_core::factory::tool_call_args("tc1", "{}"))
+        );
+        assert!(
+            matches!(&events[2], Ok(event) if *event == ag_ui_core::factory::tool_call_end("tc1"))
+        );
+        assert!(
+            matches!(&events[3], Ok(ag_ui_core::Event::ToolCallResult(event)) if event.tool_call_id == "tc1" && event.content == "ok")
+        );
     }
 
     #[tokio::test]
@@ -407,9 +421,15 @@ mod tests {
         };
 
         assert_ne!(reasoning_start_id, reasoning_message_id);
-        assert!(matches!(&events[2], Ok(ag_ui_core::Event::ReasoningMessageContent(event)) if event.message_id == reasoning_message_id && event.delta == "plan"));
-        assert!(matches!(&events[3], Ok(ag_ui_core::Event::ReasoningMessageEnd(event)) if event.message_id == reasoning_message_id));
-        assert!(matches!(&events[4], Ok(ag_ui_core::Event::ReasoningEnd(event)) if event.message_id == reasoning_start_id));
+        assert!(
+            matches!(&events[2], Ok(ag_ui_core::Event::ReasoningMessageContent(event)) if event.message_id == reasoning_message_id && event.delta == "plan")
+        );
+        assert!(
+            matches!(&events[3], Ok(ag_ui_core::Event::ReasoningMessageEnd(event)) if event.message_id == reasoning_message_id)
+        );
+        assert!(
+            matches!(&events[4], Ok(ag_ui_core::Event::ReasoningEnd(event)) if event.message_id == reasoning_start_id)
+        );
     }
 
     #[tokio::test]
@@ -421,24 +441,32 @@ mod tests {
         )])
         .await;
 
-        assert!(matches!(&events[0], Ok(ag_ui_core::Event::ReasoningMessageContent(event)) if event.message_id.starts_with("legacy-reasoning-message-")));
+        assert!(
+            matches!(&events[0], Ok(ag_ui_core::Event::ReasoningMessageContent(event)) if event.message_id.starts_with("legacy-reasoning-message-"))
+        );
     }
 
     #[tokio::test]
     async fn converts_state_messages_to_snapshots() {
-        let events = collect(vec![LegacyEvent::AgentStateMessage(LegacyAgentStateMessage {
-            state: json!({"count": 1}).to_string(),
-        })])
+        let events = collect(vec![LegacyEvent::AgentStateMessage(
+            LegacyAgentStateMessage {
+                state: json!({"count": 1}).to_string(),
+            },
+        )])
         .await;
 
-        assert!(matches!(&events[0], Ok(ag_ui_core::Event::StateSnapshot(event)) if event.snapshot == json!({"count": 1})));
+        assert!(
+            matches!(&events[0], Ok(ag_ui_core::Event::StateSnapshot(event)) if event.snapshot == json!({"count": 1}))
+        );
     }
 
     #[tokio::test]
     async fn invalid_state_message_yields_error() {
-        let events = collect(vec![LegacyEvent::AgentStateMessage(LegacyAgentStateMessage {
-            state: "not-json".into(),
-        })])
+        let events = collect(vec![LegacyEvent::AgentStateMessage(
+            LegacyAgentStateMessage {
+                state: "not-json".into(),
+            },
+        )])
         .await;
 
         assert!(events[0].is_err());
@@ -458,7 +486,11 @@ mod tests {
         ])
         .await;
 
-        assert!(matches!(&events[0], Ok(ag_ui_core::Event::Custom(event)) if event.name == "PredictState"));
-        assert!(matches!(&events[1], Ok(ag_ui_core::Event::RunError(event)) if event.message == "boom" && event.code.as_deref() == Some("E_BOOM")));
+        assert!(
+            matches!(&events[0], Ok(ag_ui_core::Event::Custom(event)) if event.name == "PredictState")
+        );
+        assert!(
+            matches!(&events[1], Ok(ag_ui_core::Event::RunError(event)) if event.message == "boom" && event.code.as_deref() == Some("E_BOOM"))
+        );
     }
 }

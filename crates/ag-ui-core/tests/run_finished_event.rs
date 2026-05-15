@@ -37,7 +37,9 @@ fn run_finished_parses_legacy_shape_with_result() {
         "result": { "answer": 42 }
     }));
 
-    assert!(matches!(event, Event::RunFinished(ref event) if event.outcome.is_none() && event.result == Some(json!({ "answer": 42 }))));
+    assert!(
+        matches!(event, Event::RunFinished(ref event) if event.outcome.is_none() && event.result == Some(json!({ "answer": 42 })))
+    );
 }
 
 #[test]
@@ -50,7 +52,9 @@ fn run_finished_parses_success_outcome() {
         "result": { "answer": 42 }
     }));
 
-    assert!(matches!(event, Event::RunFinished(ref event) if event.outcome == Some(RunFinishedOutcome::Success) && event.result == Some(json!({ "answer": 42 }))));
+    assert!(
+        matches!(event, Event::RunFinished(ref event) if event.outcome == Some(RunFinishedOutcome::Success) && event.result == Some(json!({ "answer": 42 })))
+    );
 }
 
 #[test]
@@ -65,7 +69,9 @@ fn run_finished_parses_interrupt_outcome() {
         }
     }));
 
-    assert!(matches!(event, Event::RunFinished(ref event) if matches!(&event.outcome, Some(RunFinishedOutcome::Interrupt { interrupts }) if interrupts.len() == 1)));
+    assert!(
+        matches!(event, Event::RunFinished(ref event) if matches!(&event.outcome, Some(RunFinishedOutcome::Interrupt { interrupts }) if interrupts.len() == 1))
+    );
 }
 
 // SKIPPED: rejects outcome with empty interrupts: Rust SDK has no runtime non-empty validation for RunFinishedOutcome::Interrupt.
@@ -93,7 +99,9 @@ fn event_union_routes_run_finished_success_correctly() {
     }))
     .expect("deserialize success through outer union");
 
-    assert!(matches!(parsed, Event::RunFinished(ref event) if event.outcome == Some(RunFinishedOutcome::Success)));
+    assert!(
+        matches!(parsed, Event::RunFinished(ref event) if event.outcome == Some(RunFinishedOutcome::Success))
+    );
 }
 
 #[test]
@@ -109,7 +117,9 @@ fn event_union_routes_run_finished_interrupt_correctly() {
     }))
     .expect("deserialize interrupt through outer union");
 
-    assert!(matches!(parsed, Event::RunFinished(ref event) if matches!(&event.outcome, Some(RunFinishedOutcome::Interrupt { interrupts }) if interrupts.len() == 1)));
+    assert!(
+        matches!(parsed, Event::RunFinished(ref event) if matches!(&event.outcome, Some(RunFinishedOutcome::Interrupt { interrupts }) if interrupts.len() == 1))
+    );
 }
 
 #[test]

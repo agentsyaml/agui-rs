@@ -10,7 +10,12 @@ use ag_ui_core::types::UserMessage;
 fn activity_content(tasks: &[&str]) -> Map<String, Value> {
     Map::from_iter([(
         "tasks".to_string(),
-        Value::Array(tasks.iter().map(|task| Value::String((*task).to_string())).collect()),
+        Value::Array(
+            tasks
+                .iter()
+                .map(|task| Value::String((*task).to_string()))
+                .collect(),
+        ),
     )])
 }
 
@@ -72,11 +77,15 @@ async fn should_accumulate_messages_across_multiple_sequential_runs() {
     let messages = &second.last().expect("second run result").messages;
     assert_eq!(messages.len(), 2);
     match &messages[0] {
-        Message::Assistant(message) => assert_eq!(message.content.as_deref(), Some("Hello from run 1")),
+        Message::Assistant(message) => {
+            assert_eq!(message.content.as_deref(), Some("Hello from run 1"))
+        }
         _ => panic!("expected assistant message"),
     }
     match &messages[1] {
-        Message::Assistant(message) => assert_eq!(message.content.as_deref(), Some("Hello from run 2")),
+        Message::Assistant(message) => {
+            assert_eq!(message.content.as_deref(), Some("Hello from run 2"))
+        }
         _ => panic!("expected assistant message"),
     }
 }
@@ -117,7 +126,10 @@ async fn should_handle_three_sequential_runs_with_message_accumulation() {
             _ => panic!("expected assistant message"),
         })
         .collect();
-    assert_eq!(collected, vec!["First message", "Second message", "Third message"]);
+    assert_eq!(
+        collected,
+        vec!["First message", "Second message", "Third message"]
+    );
 }
 
 // SKIPPED: TypeScript allows multiple runs in a single event stream; Rust verify_events treats RUN_FINISHED as terminal for that stream.
@@ -158,7 +170,9 @@ async fn should_start_with_initial_messages_and_accumulate_new_ones() {
         _ => panic!("expected user message"),
     }
     match &messages[1] {
-        Message::Assistant(message) => assert_eq!(message.content.as_deref(), Some("Response message")),
+        Message::Assistant(message) => {
+            assert_eq!(message.content.as_deref(), Some("Response message"))
+        }
         _ => panic!("expected assistant message"),
     }
 }
@@ -210,5 +224,7 @@ async fn should_retain_activity_messages_across_runs() {
 
     let messages = &second.last().expect("second run result").messages;
     assert_eq!(messages.len(), 2);
-    assert!(messages.iter().any(|message| matches!(message, Message::Activity(activity) if activity.id == "activity-1")));
+    assert!(messages.iter().any(
+        |message| matches!(message, Message::Activity(activity) if activity.id == "activity-1")
+    ));
 }

@@ -4,7 +4,7 @@
 #[path = "../src/middleware.rs"]
 mod middleware;
 
-use ag_ui_core::{Event, RunAgentInput, TextMessageChunkEvent, RunFinishedEvent, BaseEventFields};
+use ag_ui_core::{BaseEventFields, Event, RunAgentInput, RunFinishedEvent, TextMessageChunkEvent};
 use async_stream::try_stream;
 use async_trait::async_trait;
 use futures::{stream, StreamExt};
@@ -43,7 +43,10 @@ async fn middleware_can_modify_live_events_before_agent_pipeline() {
     let terminal: middleware::TerminalFn = Arc::new(|input| {
         Box::pin(async move {
             Ok(Box::pin(stream::iter(vec![
-                Ok(ag_ui_core::factory::run_started(&input.run_agent_input.thread_id, &input.run_agent_input.run_id)),
+                Ok(ag_ui_core::factory::run_started(
+                    &input.run_agent_input.thread_id,
+                    &input.run_agent_input.run_id,
+                )),
                 Ok(Event::TextMessageChunk(TextMessageChunkEvent {
                     message_id: Some("message-1".into()),
                     role: Some(ag_ui_core::TextMessageRole::Assistant),

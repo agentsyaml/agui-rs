@@ -1,7 +1,7 @@
 use ag_ui_client::verify_events;
 use ag_ui_core::{
-    factory, BaseEventFields, CustomEvent, Event, MessagesSnapshotEvent, RawEvent,
-    StateDeltaEvent, StateSnapshotEvent, AgUiError,
+    factory, AgUiError, BaseEventFields, CustomEvent, Event, MessagesSnapshotEvent, RawEvent,
+    StateDeltaEvent, StateSnapshotEvent,
 };
 use futures::{stream, StreamExt};
 use serde_json::{json, Value};
@@ -15,7 +15,10 @@ async fn collect(events: Vec<Event>) -> Vec<Result<Event, AgUiError>> {
 fn assert_validation(result: &Result<Event, AgUiError>, expected: &str) {
     match result {
         Err(AgUiError::Validation(message)) => {
-            assert!(message.contains(expected), "expected '{expected}' in '{message}'");
+            assert!(
+                message.contains(expected),
+                "expected '{expected}' in '{message}'"
+            );
         }
         other => panic!("expected validation error, got {other:?}"),
     }

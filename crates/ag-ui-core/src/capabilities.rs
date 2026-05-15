@@ -301,6 +301,9 @@ mod capabilities_tests {
             serde_json::from_value(raw).expect("deserialize capabilities");
 
         assert_eq!(capabilities.messages.unwrap().tool_calls, Some(true));
-        assert_eq!(capabilities.interrupts.unwrap().approve_with_edits, Some(true));
+        assert_eq!(
+            capabilities.interrupts.unwrap().approve_with_edits,
+            Some(true)
+        );
     }
 }

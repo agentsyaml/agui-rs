@@ -5,7 +5,10 @@
 mod middleware;
 
 use ag_ui_core::types::UserMessage;
-use ag_ui_core::{BinaryInputContent, InputContent, InputContentSource, Message, RunAgentInput, UserMessageContent};
+use ag_ui_core::{
+    BinaryInputContent, InputContent, InputContentSource, Message, RunAgentInput,
+    UserMessageContent,
+};
 use futures::stream;
 use middleware::Middleware as _;
 use serde_json::Value;
@@ -51,10 +54,7 @@ async fn run_and_capture(message: Message) -> Message {
         .run_agent_input
         .messages;
 
-    captured
-        .into_iter()
-        .next()
-        .expect("captured message")
+    captured.into_iter().next().expect("captured message")
 }
 
 #[tokio::test]
@@ -148,10 +148,18 @@ async fn converts_binary_parts_into_new_content_types() {
     }))
     .await;
 
-    assert!(matches!(image, Message::User(UserMessage { content: UserMessageContent::Parts(parts), .. }) if matches!(&parts[0], InputContent::Image { source: InputContentSource::Data { value, mime_type }, metadata } if value == "iVBORw0KGgo=" && mime_type == "image/png" && metadata.is_none())));
-    assert!(matches!(audio, Message::User(UserMessage { content: UserMessageContent::Parts(parts), .. }) if matches!(&parts[0], InputContent::Audio { source: InputContentSource::Url { value, mime_type }, metadata } if value == "https://example.com/audio.mp3" && mime_type.as_deref() == Some("audio/mp3") && metadata.is_none())));
-    assert!(matches!(video, Message::User(UserMessage { content: UserMessageContent::Parts(parts), .. }) if matches!(&parts[0], InputContent::Video { source: InputContentSource::Data { value, mime_type }, metadata } if value == "AAAA" && mime_type == "video/mp4" && metadata.is_none())));
-    assert!(matches!(document, Message::User(UserMessage { content: UserMessageContent::Parts(parts), .. }) if matches!(&parts[0], InputContent::Document { source: InputContentSource::Url { value, mime_type }, metadata } if value == "https://example.com/doc.pdf" && mime_type.as_deref() == Some("application/pdf") && metadata.is_none())));
+    assert!(
+        matches!(image, Message::User(UserMessage { content: UserMessageContent::Parts(parts), .. }) if matches!(&parts[0], InputContent::Image { source: InputContentSource::Data { value, mime_type }, metadata } if value == "iVBORw0KGgo=" && mime_type == "image/png" && metadata.is_none()))
+    );
+    assert!(
+        matches!(audio, Message::User(UserMessage { content: UserMessageContent::Parts(parts), .. }) if matches!(&parts[0], InputContent::Audio { source: InputContentSource::Url { value, mime_type }, metadata } if value == "https://example.com/audio.mp3" && mime_type.as_deref() == Some("audio/mp3") && metadata.is_none()))
+    );
+    assert!(
+        matches!(video, Message::User(UserMessage { content: UserMessageContent::Parts(parts), .. }) if matches!(&parts[0], InputContent::Video { source: InputContentSource::Data { value, mime_type }, metadata } if value == "AAAA" && mime_type == "video/mp4" && metadata.is_none()))
+    );
+    assert!(
+        matches!(document, Message::User(UserMessage { content: UserMessageContent::Parts(parts), .. }) if matches!(&parts[0], InputContent::Document { source: InputContentSource::Url { value, mime_type }, metadata } if value == "https://example.com/doc.pdf" && mime_type.as_deref() == Some("application/pdf") && metadata.is_none()))
+    );
 }
 
 #[tokio::test]
@@ -172,7 +180,9 @@ async fn preserves_filename_and_prefers_data_over_url() {
     }))
     .await;
 
-    assert!(matches!(captured, Message::User(UserMessage { content: UserMessageContent::Parts(parts), .. }) if matches!(&parts[0], InputContent::Image { source: InputContentSource::Data { value, mime_type }, metadata: Some(Value::Object(meta)) } if value == "base64data" && mime_type == "image/jpeg" && meta.get("filename") == Some(&Value::String("photo.jpg".into())))));
+    assert!(
+        matches!(captured, Message::User(UserMessage { content: UserMessageContent::Parts(parts), .. }) if matches!(&parts[0], InputContent::Image { source: InputContentSource::Data { value, mime_type }, metadata: Some(Value::Object(meta)) } if value == "base64data" && mime_type == "image/jpeg" && meta.get("filename") == Some(&Value::String("photo.jpg".into()))))
+    );
 }
 
 #[tokio::test]
@@ -220,8 +230,12 @@ async fn leaves_id_only_binary_and_mixed_parts_as_expected() {
     }))
     .await;
 
-    assert!(matches!(id_only, Message::User(UserMessage { content: UserMessageContent::Parts(parts), .. }) if matches!(&parts[0], InputContent::Binary { content } if content.id.as_deref() == Some("file-123"))));
-    assert!(matches!(mixed, Message::User(UserMessage { content: UserMessageContent::Parts(parts), .. }) if parts.len() == 3 && matches!(&parts[0], InputContent::Text { text } if text == "Look at this:") && matches!(&parts[1], InputContent::Image { source: InputContentSource::Data { value, mime_type }, .. } if value == "imgdata" && mime_type == "image/png") && matches!(&parts[2], InputContent::Image { source: InputContentSource::Url { value, .. }, .. } if value == "https://example.com/img.png")));
+    assert!(
+        matches!(id_only, Message::User(UserMessage { content: UserMessageContent::Parts(parts), .. }) if matches!(&parts[0], InputContent::Binary { content } if content.id.as_deref() == Some("file-123")))
+    );
+    assert!(
+        matches!(mixed, Message::User(UserMessage { content: UserMessageContent::Parts(parts), .. }) if parts.len() == 3 && matches!(&parts[0], InputContent::Text { text } if text == "Look at this:") && matches!(&parts[1], InputContent::Image { source: InputContentSource::Data { value, mime_type }, .. } if value == "imgdata" && mime_type == "image/png") && matches!(&parts[2], InputContent::Image { source: InputContentSource::Url { value, .. }, .. } if value == "https://example.com/img.png"))
+    );
 }
 
 // SKIPPED: automatically transforms when maxVersion <= 0.0.47: Rust tests target the middleware submodule directly; there is no auto-insertion layer to exercise here.

@@ -27,7 +27,10 @@ fn debug_logger_is_enabled_for_truthy_env_values() {
 
     for value in ["1", "true", "yes", "on", "debug"] {
         std::env::set_var("AG_UI_DEBUG", value);
-        assert!(DebugLogger::new("agent").enabled(), "expected {value} to enable logging");
+        assert!(
+            DebugLogger::new("agent").enabled(),
+            "expected {value} to enable logging"
+        );
     }
 
     if let Some(value) = original {

@@ -9,9 +9,8 @@ use legacy_impl::{
     convert_legacy_events, LegacyActionExecutionArgs, LegacyActionExecutionEnd,
     LegacyActionExecutionResult, LegacyActionExecutionStart, LegacyAgentStateMessage, LegacyEvent,
     LegacyMetaEvent, LegacyMetaEventName, LegacyRunError, LegacyTextMessageContent,
-    LegacyTextMessageEnd, LegacyTextMessageStart, LegacyThinkingEnd,
-    LegacyThinkingTextMessageContent, LegacyThinkingTextMessageEnd,
-    LegacyThinkingTextMessageStart, LegacyThinkingStart,
+    LegacyTextMessageEnd, LegacyTextMessageStart, LegacyThinkingEnd, LegacyThinkingStart,
+    LegacyThinkingTextMessageContent, LegacyThinkingTextMessageEnd, LegacyThinkingTextMessageStart,
 };
 use serde_json::json;
 
@@ -37,9 +36,15 @@ async fn converts_text_message_legacy_events_to_ag_ui_events() {
     ])
     .await;
 
-    assert!(matches!(&events[0], Ok(event) if *event == ag_ui_core::factory::text_message_start("m1")));
-    assert!(matches!(&events[1], Ok(event) if *event == ag_ui_core::factory::text_message_content("m1", "hello")));
-    assert!(matches!(&events[2], Ok(event) if *event == ag_ui_core::factory::text_message_end("m1")));
+    assert!(
+        matches!(&events[0], Ok(event) if *event == ag_ui_core::factory::text_message_start("m1"))
+    );
+    assert!(
+        matches!(&events[1], Ok(event) if *event == ag_ui_core::factory::text_message_content("m1", "hello"))
+    );
+    assert!(
+        matches!(&events[2], Ok(event) if *event == ag_ui_core::factory::text_message_end("m1"))
+    );
 }
 
 #[tokio::test]
@@ -65,10 +70,16 @@ async fn converts_tool_call_legacy_events_and_preserves_result_payload() {
     ])
     .await;
 
-    assert!(matches!(&events[0], Ok(Event::ToolCallStart(start)) if start.tool_call_id == "tc1" && start.tool_call_name == "search" && start.parent_message_id.as_deref() == Some("m1")));
-    assert!(matches!(&events[1], Ok(event) if *event == ag_ui_core::factory::tool_call_args("tc1", "{}")));
+    assert!(
+        matches!(&events[0], Ok(Event::ToolCallStart(start)) if start.tool_call_id == "tc1" && start.tool_call_name == "search" && start.parent_message_id.as_deref() == Some("m1"))
+    );
+    assert!(
+        matches!(&events[1], Ok(event) if *event == ag_ui_core::factory::tool_call_args("tc1", "{}"))
+    );
     assert!(matches!(&events[2], Ok(event) if *event == ag_ui_core::factory::tool_call_end("tc1")));
-    assert!(matches!(&events[3], Ok(Event::ToolCallResult(result)) if result.tool_call_id == "tc1" && result.content == "ok"));
+    assert!(
+        matches!(&events[3], Ok(Event::ToolCallResult(result)) if result.tool_call_id == "tc1" && result.content == "ok")
+    );
 }
 
 #[tokio::test]
@@ -94,9 +105,15 @@ async fn converts_thinking_legacy_events_to_reasoning_events() {
     };
 
     assert_ne!(reasoning_start_id, reasoning_message_id);
-    assert!(matches!(&events[2], Ok(Event::ReasoningMessageContent(event)) if event.message_id == reasoning_message_id && event.delta == "plan"));
-    assert!(matches!(&events[3], Ok(Event::ReasoningMessageEnd(event)) if event.message_id == reasoning_message_id));
-    assert!(matches!(&events[4], Ok(Event::ReasoningEnd(event)) if event.message_id == reasoning_start_id));
+    assert!(
+        matches!(&events[2], Ok(Event::ReasoningMessageContent(event)) if event.message_id == reasoning_message_id && event.delta == "plan")
+    );
+    assert!(
+        matches!(&events[3], Ok(Event::ReasoningMessageEnd(event)) if event.message_id == reasoning_message_id)
+    );
+    assert!(
+        matches!(&events[4], Ok(Event::ReasoningEnd(event)) if event.message_id == reasoning_start_id)
+    );
 }
 
 #[tokio::test]
@@ -116,16 +133,22 @@ async fn converts_agent_state_meta_and_run_error_legacy_events() {
     ])
     .await;
 
-    assert!(matches!(&events[0], Ok(Event::StateSnapshot(snapshot)) if snapshot.snapshot == json!({"count": 1})));
+    assert!(
+        matches!(&events[0], Ok(Event::StateSnapshot(snapshot)) if snapshot.snapshot == json!({"count": 1}))
+    );
     assert!(matches!(&events[1], Ok(Event::Custom(custom)) if custom.name == "PredictState"));
-    assert!(matches!(&events[2], Ok(Event::RunError(error)) if error.message == "boom" && error.code.as_deref() == Some("E_BOOM")));
+    assert!(
+        matches!(&events[2], Ok(Event::RunError(error)) if error.message == "boom" && error.code.as_deref() == Some("E_BOOM"))
+    );
 }
 
 #[tokio::test]
 async fn invalid_agent_state_message_returns_error() {
-    let events = collect(vec![LegacyEvent::AgentStateMessage(LegacyAgentStateMessage {
-        state: "not-json".into(),
-    })])
+    let events = collect(vec![LegacyEvent::AgentStateMessage(
+        LegacyAgentStateMessage {
+            state: "not-json".into(),
+        },
+    )])
     .await;
 
     assert!(events[0].is_err());

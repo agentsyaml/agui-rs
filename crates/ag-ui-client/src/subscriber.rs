@@ -1,15 +1,15 @@
-use ag_ui_core::{
-    ActivityDeltaEvent, ActivitySnapshotEvent, AgUiError, CustomEvent, Event,
-    Interrupt, Message, MessagesSnapshotEvent, RawEvent, ReasoningEncryptedValueEvent,
-    ReasoningEndEvent, ReasoningMessageChunkEvent, ReasoningMessageContentEvent,
-    ReasoningMessageEndEvent, ReasoningMessageStartEvent, ReasoningStartEvent, RunErrorEvent,
-    RunFinishedEvent, RunFinishedOutcome, RunStartedEvent, State, StateDeltaEvent,
-    StateSnapshotEvent, StepFinishedEvent, StepStartedEvent, TextMessageChunkEvent,
-    TextMessageContentEvent, TextMessageEndEvent, TextMessageStartEvent, ThinkingEndEvent,
-    ThinkingStartEvent, ToolCall, ToolCallArgsEvent, ToolCallChunkEvent, ToolCallEndEvent,
-    ToolCallResultEvent, ToolCallStartEvent,
-};
 use ag_ui_core::types::ActivityMessage;
+use ag_ui_core::{
+    ActivityDeltaEvent, ActivitySnapshotEvent, AgUiError, CustomEvent, Event, Interrupt, Message,
+    MessagesSnapshotEvent, RawEvent, ReasoningEncryptedValueEvent, ReasoningEndEvent,
+    ReasoningMessageChunkEvent, ReasoningMessageContentEvent, ReasoningMessageEndEvent,
+    ReasoningMessageStartEvent, ReasoningStartEvent, RunErrorEvent, RunFinishedEvent,
+    RunFinishedOutcome, RunStartedEvent, State, StateDeltaEvent, StateSnapshotEvent,
+    StepFinishedEvent, StepStartedEvent, TextMessageChunkEvent, TextMessageContentEvent,
+    TextMessageEndEvent, TextMessageStartEvent, ThinkingEndEvent, ThinkingStartEvent, ToolCall,
+    ToolCallArgsEvent, ToolCallChunkEvent, ToolCallEndEvent, ToolCallResultEvent,
+    ToolCallStartEvent,
+};
 use async_trait::async_trait;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -149,7 +149,13 @@ pub trait AgentSubscriber: Send + Sync {
 
     async fn on_text_message_end(&self, _ctx: &RunContext, _message_id: &str) {}
 
-    async fn on_tool_call_start(&self, _ctx: &RunContext, _tool_call_id: &str, _tool_call_name: &str) {}
+    async fn on_tool_call_start(
+        &self,
+        _ctx: &RunContext,
+        _tool_call_id: &str,
+        _tool_call_name: &str,
+    ) {
+    }
 
     async fn on_tool_call_args(&self, _ctx: &RunContext, _tool_call_id: &str, _delta: &str) {}
 
@@ -406,11 +412,11 @@ pub trait AgentSubscriber: Send + Sync {
 #[cfg(test)]
 mod subscriber_tests {
     use super::*;
-    use ag_ui_core::{
-        BaseEventFields, FunctionCall, ReasoningMessageRole, RunFinishedOutcome,
-        TextMessageRole, ToolCallKind,
-    };
     use ag_ui_core::types::AssistantMessage;
+    use ag_ui_core::{
+        BaseEventFields, FunctionCall, ReasoningMessageRole, RunFinishedOutcome, TextMessageRole,
+        ToolCallKind,
+    };
     use serde_json::json;
     use std::sync::{Arc, Mutex};
 
@@ -1185,7 +1191,10 @@ mod subscriber_tests {
             .expect("mutation succeeds")
             .expect("replacement present");
 
-        assert_eq!(replacement, assistant_message("m-3", Some("rewritten"), None));
+        assert_eq!(
+            replacement,
+            assistant_message("m-3", Some("rewritten"), None)
+        );
     }
 
     #[tokio::test]
@@ -1332,7 +1341,10 @@ mod subscriber_tests {
             })
             .await;
 
-        assert!(matches!(result, std::result::Result::Err(AgUiError::Other(_))));
+        assert!(matches!(
+            result,
+            std::result::Result::Err(AgUiError::Other(_))
+        ));
     }
 
     #[tokio::test]
