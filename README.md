@@ -119,6 +119,7 @@ async fn main() -> ag_ui_core::Result<()> {
         url: "http://localhost:8000/".to_string(),
         headers: Default::default(),
         agent: AgentConfig::default(),
+        request_executor: None,
     });
     let mut runner = AgentRunner::new(agent, AgentConfig::default());
     let result = runner.run_agent(RunAgentParameters::default()).await?;
@@ -137,26 +138,39 @@ cargo run -p ag-ui-client --example basic_agent
 
 ## Examples
 
-The workspace ships five runnable examples ported from the upstream
+The workspace ships nine runnable examples ported from the upstream
 `integrations/server-starter-all-features` reference (Python & TypeScript) in
 the [ag-ui-protocol/ag-ui](https://github.com/ag-ui-protocol/ag-ui) repo.
+The protocol/examples baseline is `42c57161` (`main`, 2026-05-17) /
+tag `release/2026-05-15` (`35e7cac6`), with client updates reviewed through
+`d74e2df` / tag `release/2026-05-26` (adds upstream `HttpAgent` custom fetch
+parity, exposed here as `HttpAgentConfig::request_executor`).
 
-| Example                                  | Crate           | Mirrors (upstream)                                | Demonstrates                                                  |
-| ---------------------------------------- | --------------- | ------------------------------------------------- | ------------------------------------------------------------- |
-| `echo_agent`                             | `ag-ui-server`  | quick-start echo server                           | `RunHandler` + `EventEmitter` + `agui_router` end-to-end       |
-| `tool_based_generative_ui`               | `ag-ui-server`  | `tool_based_generative_ui.py`                     | Assistant tool call (`generate_haiku`) + `MessagesSnapshot`    |
-| `shared_state`                           | `ag-ui-server`  | `shared_state.py`                                 | `StateSnapshot` carrying a structured recipe payload           |
-| `human_in_the_loop`                      | `ag-ui-server`  | `human_in_the_loop.py`                            | Streamed `tool_call_args` chunks (12 deltas, 200 ms each)      |
-| `basic_agent` / `streaming_client`       | `ag-ui-client`  | TS `AgentSubscriber` demo                         | `HttpAgent` + `AgentRunner` + `AgentSubscriber::on_event`      |
+| Example                       | Crate           | Mirrors (upstream)                  | Demonstrates                                                          |
+| ----------------------------- | --------------- | ----------------------------------- | --------------------------------------------------------------------- |
+| `echo_agent`                  | `ag-ui-server`  | quick-start echo server             | `RunHandler` + `EventEmitter` + `agui_router` end-to-end              |
+| `agentic_chat`                | `ag-ui-server`  | `agentic_chat.py`                   | Branching countdown / `change_background` tool / weather snapshot     |
+| `agentic_generative_ui`       | `ag-ui-server`  | `agentic_generative_ui.py`          | `STATE_SNAPSHOT` + JSON-Patch `STATE_DELTA` walking a 10-step plan    |
+| `tool_based_generative_ui`    | `ag-ui-server`  | `tool_based_generative_ui.py`       | Assistant tool call (`generate_haiku`) + `MessagesSnapshot`           |
+| `shared_state`                | `ag-ui-server`  | `shared_state.py`                   | `STATE_SNAPSHOT` carrying a structured recipe payload                 |
+| `human_in_the_loop`           | `ag-ui-server`  | `human_in_the_loop.py`              | Streamed `tool_call_args` chunks (12 deltas, 200 ms each)             |
+| `backend_tool_rendering`      | `ag-ui-server`  | `backend_tool_rendering.py`         | `get_weather` tool call + result via `MessagesSnapshot`               |
+| `predictive_state_updates`    | `ag-ui-server`  | `predictive_state_updates.py`       | `PredictState` `CustomEvent` + streamed `write_document_local` args   |
+| `basic_agent`                 | `ag-ui-client`  | TS one-shot agent demo              | `HttpAgent` + `AgentRunner::run_agent` (no subscriber)                |
+| `streaming_client`            | `ag-ui-client`  | TS `AgentSubscriber` demo           | `HttpAgent` + `AgentSubscriber::on_event` printing each event         |
 
 Run a server, then in another terminal hit it:
 
 ```sh
 # Terminal 1 — pick one server
 cargo run -p ag-ui-server --example echo_agent
+cargo run -p ag-ui-server --example agentic_chat
+cargo run -p ag-ui-server --example agentic_generative_ui
 cargo run -p ag-ui-server --example tool_based_generative_ui
 cargo run -p ag-ui-server --example shared_state
 cargo run -p ag-ui-server --example human_in_the_loop
+cargo run -p ag-ui-server --example backend_tool_rendering
+cargo run -p ag-ui-server --example predictive_state_updates
 
 # Terminal 2 — either curl raw SSE
 curl -N -X POST http://127.0.0.1:8000/ \
@@ -169,7 +183,7 @@ cargo run -p ag-ui-client --example basic_agent       # one-shot
 cargo run -p ag-ui-client --example streaming_client  # subscriber prints each event
 ```
 
-All five examples are built by `cargo build --workspace --examples` in CI.
+All nine examples are built green by `cargo build --workspace --examples`.
 
 ---
 
@@ -221,7 +235,7 @@ the user’s `RunHandler`, and frames the resulting event stream as SSE.
 ## Testing
 
 ```
-cargo test --workspace          # 1112 tests (unit + ported TS integration)
+cargo test --workspace          # 1143 tests (unit + ported TS integration)
 cargo clippy --workspace --all-targets -- -D warnings
 cargo build --workspace --examples
 ```
@@ -232,7 +246,7 @@ Test counts per crate:
 | --------------- | ----- |
 | `ag-ui-core`    | 140   |
 | `ag-ui-encoder` |  13   |
-| `ag-ui-client`  | 946   |
+| `ag-ui-client`  | 977   |
 | `ag-ui-server`  |  13   |
 
 The `ag-ui-client` suite mirrors the TypeScript SDK's
