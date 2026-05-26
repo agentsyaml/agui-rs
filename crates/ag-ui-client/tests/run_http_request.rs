@@ -20,6 +20,7 @@ fn http_agent(url: String, headers: HashMap<String, String>) -> HttpAgent {
         url,
         headers,
         agent: AgentConfig::default(),
+        request_executor: None,
     })
 }
 

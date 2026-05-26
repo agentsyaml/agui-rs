@@ -55,6 +55,7 @@ async fn protobuf_content_type_returns_unsupported_error() {
         url,
         headers: HashMap::new(),
         agent: AgentConfig::default(),
+        request_executor: None,
     });
 
     let mut stream = agent

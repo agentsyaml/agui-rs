@@ -50,6 +50,7 @@ async fn main() -> ag_ui_core::Result<()> {
         url: "http://127.0.0.1:8000/".to_string(),
         headers: Default::default(),
         agent: agent_cfg.clone(),
+        request_executor: None,
     });
 
     let mut runner = AgentRunner::new(agent, agent_cfg).with_subscriber(Arc::new(PrintSubscriber));

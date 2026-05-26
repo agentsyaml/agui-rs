@@ -1,4 +1,6 @@
-use ag_ui_client::{AgUiError, Agent, AgentConfig, HttpAgent, HttpAgentConfig, RunAgentInput};
+use ag_ui_client::{
+    AgUiError, Agent, AgentConfig, HttpAgent, HttpAgentConfig, HttpRequestExecutor, RunAgentInput,
+};
 use ag_ui_core::Event;
 use futures::StreamExt;
 use serde_json::Value;
@@ -6,6 +8,7 @@ use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::mpsc;
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
@@ -20,6 +23,7 @@ fn http_agent(url: String, headers: HashMap<String, String>) -> HttpAgent {
         url,
         headers,
         agent: AgentConfig::default(),
+        request_executor: None,
     })
 }
 
@@ -199,6 +203,45 @@ async fn should_surface_http_failures() {
                 && message.contains("application/json")
                 && message.contains("User not found")
     ));
+
+    handle.join().expect("join server thread");
+}
+
+#[tokio::test]
+async fn should_use_custom_request_executor_when_configured() {
+    let (request_tx, request_rx) = mpsc::channel();
+    let (url, handle) = spawn_server(move |mut stream| {
+        let captured = read_request(&mut stream);
+        request_tx.send(captured).expect("send captured request");
+        write_response_headers(&mut stream, "HTTP/1.1 200 OK", "text/event-stream");
+    });
+
+    let executor: HttpRequestExecutor = Arc::new(|request| {
+        Box::pin(async move { request.header("X-Custom-Executor", "yes").send().await })
+    });
+
+    let events = HttpAgent::new(HttpAgentConfig {
+        url,
+        headers: HashMap::new(),
+        agent: AgentConfig::default(),
+        request_executor: Some(executor),
+    })
+    .run(RunAgentInput::new("thread-1", "run-1"))
+    .await
+    .expect("request should start")
+    .collect::<Vec<_>>()
+    .await;
+
+    assert!(events.is_empty());
+
+    let captured = request_rx.recv().expect("receive captured request");
+    assert_eq!(
+        captured
+            .headers
+            .get("x-custom-executor")
+            .map(String::as_str),
+        Some("yes")
+    );
 
     handle.join().expect("join server thread");
 }

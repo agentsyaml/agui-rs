@@ -2,15 +2,39 @@ use crate::agent::{abortable_event_stream, AbortHandle, Agent, AgentConfig, Even
 use crate::transform::{detect_stream_format, parse_sse_stream, StreamFormat, AGUI_MEDIA_TYPE_SSE};
 use ag_ui_core::{AgUiError, Event, Result, RunAgentInput};
 use async_trait::async_trait;
+use futures::future::BoxFuture;
 use futures::{stream, stream::BoxStream};
 use reqwest::header::{ACCEPT, CONTENT_TYPE};
 use std::collections::HashMap;
+use std::fmt;
+use std::sync::Arc;
 
-#[derive(Debug, Clone)]
+pub type HttpRequestExecutor = Arc<
+    dyn Fn(reqwest::RequestBuilder) -> BoxFuture<'static, reqwest::Result<reqwest::Response>>
+        + Send
+        + Sync,
+>;
+
+#[derive(Clone)]
 pub struct HttpAgentConfig {
     pub url: String,
     pub headers: HashMap<String, String>,
     pub agent: AgentConfig,
+    pub request_executor: Option<HttpRequestExecutor>,
+}
+
+impl fmt::Debug for HttpAgentConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("HttpAgentConfig")
+            .field("url", &self.url)
+            .field("headers", &self.headers)
+            .field("agent", &self.agent)
+            .field(
+                "request_executor",
+                &self.request_executor.as_ref().map(|_| "<custom>"),
+            )
+            .finish()
+    }
 }
 
 pub struct HttpAgent {
@@ -52,9 +76,16 @@ impl Agent for HttpAgent {
             request = request.header(key, value);
         }
 
+        let response_future: BoxFuture<'static, reqwest::Result<reqwest::Response>> =
+            if let Some(executor) = &self.config.request_executor {
+                executor(request)
+            } else {
+                Box::pin(async move { request.send().await })
+            };
+
         let response = tokio::select! {
             _ = abort.cancelled() => return Err(AgUiError::Cancelled),
-            response = request.send() => response,
+            response = response_future => response,
         }
         .map_err(|error| {
             if abort.is_aborted() {
@@ -207,6 +238,7 @@ mod abort_tests {
             url,
             headers: Default::default(),
             agent: AgentConfig::default(),
+            request_executor: None,
         })
     }
 

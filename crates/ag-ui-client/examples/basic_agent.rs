@@ -6,6 +6,7 @@ async fn main() -> ag_ui_core::Result<()> {
         url: "http://localhost:8000/".to_string(),
         headers: Default::default(),
         agent: AgentConfig::default(),
+        request_executor: None,
     });
 
     let mut runner = AgentRunner::new(agent, AgentConfig::default());
