@@ -26,13 +26,15 @@ pub use chunks::expand_chunks;
 pub use compact::compact_events;
 pub use debug_logger::DebugLogger;
 pub use error::{AgUiError, Result};
-pub use http::{HttpAgent, HttpAgentConfig};
+pub use http::{HttpAgent, HttpAgentConfig, HttpRequestExecutor};
 pub use interrupts::{get_run_outcome, is_interrupt_expired, ResumeResponse};
 pub use legacy::convert_legacy_events;
 pub use middleware::{Middleware, MiddlewareChain};
 pub use subscriber::{
-    AgentSubscriber, EventContext, RunContext, RunFailedContext, RunFinishedContext,
-    TextContentContext, TextEndContext, ToolCallArgsContext,
+    ActivityDeltaContext, ActivitySnapshotContext, AgentSubscriber, EventContext, InterruptContext,
+    NewMessageContext, NewToolCallContext, ReasoningContentContext, ReasoningEndContext,
+    RunContext, RunFailedContext, RunFinishedContext, TextContentContext, TextEndContext,
+    ToolCallArgsContext, ToolCallEndContext, ToolCallResultContext,
 };
 pub use transform::{
     detect_stream_format, parse_sse_stream, StreamFormat, AGUI_MEDIA_TYPE_PROTOBUF,
