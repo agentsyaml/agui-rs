@@ -3,10 +3,20 @@
 version = 3
 
 [[package]]
-name = "ag-ui-client"
+name = "agui-rs"
 version = "0.1.0"
 dependencies = [
- "ag-ui-core",
+ "agui-rs-client",
+ "agui-rs-core",
+ "agui-rs-encoder",
+ "agui-rs-server",
+]
+
+[[package]]
+name = "agui-rs-client"
+version = "0.1.0"
+dependencies = [
+ "agui-rs-core",
  "async-stream",
  "async-trait",
  "bytes",
@@ -26,7 +36,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "ag-ui-core"
+name = "agui-rs-core"
 version = "0.1.0"
 dependencies = [
  "serde",
@@ -36,20 +46,20 @@ dependencies = [
 ]
 
 [[package]]
-name = "ag-ui-encoder"
+name = "agui-rs-encoder"
 version = "0.1.0"
 dependencies = [
- "ag-ui-core",
+ "agui-rs-core",
  "serde_json",
  "thiserror 1.0.69",
 ]
 
 [[package]]
-name = "ag-ui-server"
+name = "agui-rs-server"
 version = "0.1.0"
 dependencies = [
- "ag-ui-core",
- "ag-ui-encoder",
+ "agui-rs-core",
+ "agui-rs-encoder",
  "async-stream",
  "async-trait",
  "axum",

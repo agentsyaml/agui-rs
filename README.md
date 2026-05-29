@@ -18,10 +18,11 @@ state/messages reduction, and an `axum`-based server.
 
 | Crate            | Purpose                                                                 |
 | ---------------- | ----------------------------------------------------------------------- |
-| `ag-ui-core`     | Protocol data types, all 33 event payloads, `Event` discriminated enum. |
-| `ag-ui-encoder`  | Wire-format encoder. SSE today; protobuf surface stubbed (`Unsupported`). |
-| `ag-ui-client`   | `Agent` trait, `HttpAgent`, runner, subscriber, chunk/verify/apply pipeline. |
-| `ag-ui-server`   | `RunHandler` trait, channel-based `EventEmitter`, `axum` route builder. |
+| `agui-rs-core`     | Protocol data types, all 33 event payloads, `Event` discriminated enum. |
+| `agui-rs-encoder`  | Wire-format encoder. SSE today; protobuf surface stubbed (`Unsupported`). |
+| `agui-rs-client`   | `Agent` trait, `HttpAgent`, runner, subscriber, chunk/verify/apply pipeline. |
+| `agui-rs-server`   | `RunHandler` trait, channel-based `EventEmitter`, `axum` route builder. |
+| `agui-rs`          | Facade crate re-exporting all others via Cargo features.               |
 
 All four crates share a workspace `Cargo.toml`; build everything with
 `cargo build --workspace`.
@@ -33,8 +34,8 @@ All four crates share a workspace `Cargo.toml`; build everything with
 ### Server (echo agent)
 
 ```rust
-use ag_ui_core::{Message, Result, RunAgentInput, UserMessageContent};
-use ag_ui_server::{agui_router, channel, RunHandler};
+use agui_rs_core::{Message, Result, RunAgentInput, UserMessageContent};
+use agui_rs_server::{agui_router, channel, RunHandler};
 use async_trait::async_trait;
 use futures::stream::BoxStream;
 
@@ -45,7 +46,7 @@ impl RunHandler for EchoHandler {
     async fn handle(
         &self,
         input: RunAgentInput,
-    ) -> Result<BoxStream<'static, Result<ag_ui_core::Event>>> {
+    ) -> Result<BoxStream<'static, Result<agui_rs_core::Event>>> {
         let (emitter, stream) = channel(32);
 
         let last_user_text = input.messages.iter().rev().find_map(|m| match m {
@@ -72,9 +73,9 @@ impl RunHandler for EchoHandler {
 async fn main() -> Result<()> {
     let app = agui_router(EchoHandler);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:8000").await
-        .map_err(|e| ag_ui_core::AgUiError::other(e.to_string()))?;
+        .map_err(|e| agui_rs_core::AgUiError::other(e.to_string()))?;
     axum::serve(listener, app).await
-        .map_err(|e| ag_ui_core::AgUiError::other(e.to_string()))?;
+        .map_err(|e| agui_rs_core::AgUiError::other(e.to_string()))?;
     Ok(())
 }
 ```
@@ -82,7 +83,7 @@ async fn main() -> Result<()> {
 Run it:
 
 ```sh
-cargo run -p ag-ui-server --example echo_agent
+cargo run -p agui-rs-server --example echo_agent
 ```
 
 Hit it with `curl`:
@@ -111,10 +112,10 @@ data: {"type":"RUN_FINISHED","threadId":"t1","runId":"r1","outcome":{"type":"suc
 ### Client
 
 ```rust
-use ag_ui_client::{AgentConfig, AgentRunner, HttpAgent, HttpAgentConfig, RunAgentParameters};
+use agui_rs_client::{AgentConfig, AgentRunner, HttpAgent, HttpAgentConfig, RunAgentParameters};
 
 #[tokio::main]
-async fn main() -> ag_ui_core::Result<()> {
+async fn main() -> agui_rs_core::Result<()> {
     let agent = HttpAgent::new(HttpAgentConfig {
         url: "http://localhost:8000/".to_string(),
         headers: Default::default(),
@@ -131,7 +132,7 @@ async fn main() -> ag_ui_core::Result<()> {
 Run with:
 
 ```sh
-cargo run -p ag-ui-client --example basic_agent
+cargo run -p agui-rs-client --example basic_agent
 ```
 
 ---
@@ -148,29 +149,29 @@ parity, exposed here as `HttpAgentConfig::request_executor`).
 
 | Example                       | Crate           | Mirrors (upstream)                  | Demonstrates                                                          |
 | ----------------------------- | --------------- | ----------------------------------- | --------------------------------------------------------------------- |
-| `echo_agent`                  | `ag-ui-server`  | quick-start echo server             | `RunHandler` + `EventEmitter` + `agui_router` end-to-end              |
-| `agentic_chat`                | `ag-ui-server`  | `agentic_chat.py`                   | Branching countdown / `change_background` tool / weather snapshot     |
-| `agentic_generative_ui`       | `ag-ui-server`  | `agentic_generative_ui.py`          | `STATE_SNAPSHOT` + JSON-Patch `STATE_DELTA` walking a 10-step plan    |
-| `tool_based_generative_ui`    | `ag-ui-server`  | `tool_based_generative_ui.py`       | Assistant tool call (`generate_haiku`) + `MessagesSnapshot`           |
-| `shared_state`                | `ag-ui-server`  | `shared_state.py`                   | `STATE_SNAPSHOT` carrying a structured recipe payload                 |
-| `human_in_the_loop`           | `ag-ui-server`  | `human_in_the_loop.py`              | Streamed `tool_call_args` chunks (12 deltas, 200 ms each)             |
-| `backend_tool_rendering`      | `ag-ui-server`  | `backend_tool_rendering.py`         | `get_weather` tool call + result via `MessagesSnapshot`               |
-| `predictive_state_updates`    | `ag-ui-server`  | `predictive_state_updates.py`       | `PredictState` `CustomEvent` + streamed `write_document_local` args   |
-| `basic_agent`                 | `ag-ui-client`  | TS one-shot agent demo              | `HttpAgent` + `AgentRunner::run_agent` (no subscriber)                |
-| `streaming_client`            | `ag-ui-client`  | TS `AgentSubscriber` demo           | `HttpAgent` + `AgentSubscriber::on_event` printing each event         |
+| `echo_agent`                  | `agui-rs-server`  | quick-start echo server             | `RunHandler` + `EventEmitter` + `agui_router` end-to-end              |
+| `agentic_chat`                | `agui-rs-server`  | `agentic_chat.py`                   | Branching countdown / `change_background` tool / weather snapshot     |
+| `agentic_generative_ui`       | `agui-rs-server`  | `agentic_generative_ui.py`          | `STATE_SNAPSHOT` + JSON-Patch `STATE_DELTA` walking a 10-step plan    |
+| `tool_based_generative_ui`    | `agui-rs-server`  | `tool_based_generative_ui.py`       | Assistant tool call (`generate_haiku`) + `MessagesSnapshot`           |
+| `shared_state`                | `agui-rs-server`  | `shared_state.py`                   | `STATE_SNAPSHOT` carrying a structured recipe payload                 |
+| `human_in_the_loop`           | `agui-rs-server`  | `human_in_the_loop.py`              | Streamed `tool_call_args` chunks (12 deltas, 200 ms each)             |
+| `backend_tool_rendering`      | `agui-rs-server`  | `backend_tool_rendering.py`         | `get_weather` tool call + result via `MessagesSnapshot`               |
+| `predictive_state_updates`    | `agui-rs-server`  | `predictive_state_updates.py`       | `PredictState` `CustomEvent` + streamed `write_document_local` args   |
+| `basic_agent`                 | `agui-rs-client`  | TS one-shot agent demo              | `HttpAgent` + `AgentRunner::run_agent` (no subscriber)                |
+| `streaming_client`            | `agui-rs-client`  | TS `AgentSubscriber` demo           | `HttpAgent` + `AgentSubscriber::on_event` printing each event         |
 
 Run a server, then in another terminal hit it:
 
 ```sh
 # Terminal 1 — pick one server
-cargo run -p ag-ui-server --example echo_agent
-cargo run -p ag-ui-server --example agentic_chat
-cargo run -p ag-ui-server --example agentic_generative_ui
-cargo run -p ag-ui-server --example tool_based_generative_ui
-cargo run -p ag-ui-server --example shared_state
-cargo run -p ag-ui-server --example human_in_the_loop
-cargo run -p ag-ui-server --example backend_tool_rendering
-cargo run -p ag-ui-server --example predictive_state_updates
+cargo run -p agui-rs-server --example echo_agent
+cargo run -p agui-rs-server --example agentic_chat
+cargo run -p agui-rs-server --example agentic_generative_ui
+cargo run -p agui-rs-server --example tool_based_generative_ui
+cargo run -p agui-rs-server --example shared_state
+cargo run -p agui-rs-server --example human_in_the_loop
+cargo run -p agui-rs-server --example backend_tool_rendering
+cargo run -p agui-rs-server --example predictive_state_updates
 
 # Terminal 2 — either curl raw SSE
 curl -N -X POST http://127.0.0.1:8000/ \
@@ -179,8 +180,8 @@ curl -N -X POST http://127.0.0.1:8000/ \
   --data '{"threadId":"t1","runId":"r1","messages":[{"role":"user","id":"m1","content":"hello"}],"tools":[],"context":[],"state":{},"forwardedProps":null}'
 
 # …or use the Rust client
-cargo run -p ag-ui-client --example basic_agent       # one-shot
-cargo run -p ag-ui-client --example streaming_client  # subscriber prints each event
+cargo run -p agui-rs-client --example basic_agent       # one-shot
+cargo run -p agui-rs-client --example streaming_client  # subscriber prints each event
 ```
 
 All nine examples are built green by `cargo build --workspace --examples`.
@@ -244,12 +245,12 @@ Test counts per crate:
 
 | Crate           | Tests |
 | --------------- | ----- |
-| `ag-ui-core`    | 140   |
-| `ag-ui-encoder` |  13   |
-| `ag-ui-client`  | 977   |
-| `ag-ui-server`  |  13   |
+| `agui-rs-core`    | 140   |
+| `agui-rs-encoder` |  13   |
+| `agui-rs-client`  | 977   |
+| `agui-rs-server`  |  13   |
 
-The `ag-ui-client` suite mirrors the TypeScript SDK's
+The `agui-rs-client` suite mirrors the TypeScript SDK's
 `packages/client/__tests__` directory across `verify/`, `chunks/`,
 `transform/`, `run/`, `middleware/`, `interrupts/`, and `agent/`. Cases that
 depend on TypeScript-only API surface (e.g. `AbstractAgent.clone()`,
@@ -265,17 +266,17 @@ and hitting it with `curl` (see *Quick start*).
 
 | TypeScript                                 | Rust                                            |
 | ------------------------------------------ | ----------------------------------------------- |
-| `@ag-ui/core` (types, events)              | `ag-ui-core`                                    |
-| `@ag-ui/encoder`                           | `ag-ui-encoder`                                 |
-| `@ag-ui/client` `AbstractAgent`            | `ag_ui_client::Agent` + `AgentRunner`           |
-| `HttpAgent`                                | `ag_ui_client::HttpAgent`                       |
-| `AgentSubscriber`                          | `ag_ui_client::AgentSubscriber`                 |
-| `Middleware`                               | `ag_ui_client::Middleware`                      |
-| `chunks/transform.ts`                      | `ag_ui_client::chunks::expand_chunks`           |
-| `verify/verify.ts`                         | `ag_ui_client::verify::verify_events`           |
-| `apply/default.ts`                         | `ag_ui_client::apply::default_apply_events`     |
-| `transform/sse.ts` + `transform/http.ts`   | `ag_ui_client::transform`                       |
-| FastAPI server reference                   | `ag-ui-server` (`axum`-based)                   |
+| `@ag-ui/core` (types, events)              | `agui-rs-core`                                    |
+| `@ag-ui/encoder`                           | `agui-rs-encoder`                                 |
+| `@ag-ui/client` `AbstractAgent`            | `agui_rs_client::Agent` + `AgentRunner`           |
+| `HttpAgent`                                | `agui_rs_client::HttpAgent`                       |
+| `AgentSubscriber`                          | `agui_rs_client::AgentSubscriber`                 |
+| `Middleware`                               | `agui_rs_client::Middleware`                      |
+| `chunks/transform.ts`                      | `agui_rs_client::chunks::expand_chunks`           |
+| `verify/verify.ts`                         | `agui_rs_client::verify::verify_events`           |
+| `apply/default.ts`                         | `agui_rs_client::apply::default_apply_events`     |
+| `transform/sse.ts` + `transform/http.ts`   | `agui_rs_client::transform`                       |
+| FastAPI server reference                   | `agui-rs-server` (`axum`-based)                   |
 
 ---
 

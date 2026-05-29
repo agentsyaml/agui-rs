@@ -1,29 +1,31 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/ag-ui-core",
-    "crates/ag-ui-encoder",
-    "crates/ag-ui-client",
-    "crates/ag-ui-server",
+    "crates/agui-rs-core",
+    "crates/agui-rs-encoder",
+    "crates/agui-rs-client",
+    "crates/agui-rs-server",
+    "crates/agui-rs",
 ]
 
 [workspace.package]
-version = "0.1.0"
-edition = "2021"
+version      = "0.1.0"
+edition      = "2021"
 rust-version = "1.75"
-license = "MIT"
-repository = "https://github.com/your-org/ag-ui-rust"
-homepage = "https://docs.ag-ui.com"
-description = "Rust SDK for the AG-UI (Agent-User Interaction) protocol"
-keywords = ["ag-ui", "agent", "ai", "sse", "streaming"]
-categories = ["api-bindings", "asynchronous"]
+license      = "Apache-2.0"
+repository   = "https://github.com/agentsyaml/agui-rs"
+homepage     = "https://github.com/agentsyaml/agui-rs"
+description  = "Rust SDK for the AG-UI (Agent-User Interaction) protocol"
+keywords     = ["agui", "agent", "ai", "sse", "streaming"]
+categories   = ["api-bindings", "asynchronous"]
+authors      = ["agentsyaml"]
 
 [workspace.dependencies]
 # Internal crates (path-resolved within workspace)
-ag-ui-core = { path = "crates/ag-ui-core", version = "0.1.0" }
-ag-ui-encoder = { path = "crates/ag-ui-encoder", version = "0.1.0" }
-ag-ui-client = { path = "crates/ag-ui-client", version = "0.1.0" }
-ag-ui-server = { path = "crates/ag-ui-server", version = "0.1.0" }
+agui-rs-core    = { path = "crates/agui-rs-core",    version = "0.1.0" }
+agui-rs-encoder = { path = "crates/agui-rs-encoder", version = "0.1.0" }
+agui-rs-client  = { path = "crates/agui-rs-client",  version = "0.1.0" }
+agui-rs-server  = { path = "crates/agui-rs-server",  version = "0.1.0" }
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
