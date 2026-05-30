@@ -5,7 +5,7 @@ use agui_rs_core::types::{
 use agui_rs_core::{
     ActivityDeltaEvent, ActivitySnapshotEvent, AgUiError, Event, FunctionCall, Message,
     ReasoningEncryptedValueSubtype, Result, State, StateDeltaEvent, TextMessageRole, ToolCall,
-    ToolCallKind, ToolCallStartEvent, ToolResultRole, UserMessageContent,
+    ToolCallKind, ToolCallStartEvent, UserMessageContent,
 };
 use async_stream::try_stream;
 use futures::{stream::BoxStream, Stream, StreamExt};
@@ -93,7 +93,6 @@ pub fn apply_event(state: &mut ApplyState, event: &Event) -> Result<()> {
                 error: None,
                 encrypted_value: None,
             }));
-            let _ = event.role.unwrap_or(ToolResultRole::Tool);
         }
         Event::MessagesSnapshot(event) => {
             apply_messages_snapshot(&mut state.messages, &event.messages)
@@ -724,7 +723,7 @@ mod tests {
 
     mod tool_call_apply {
         use super::*;
-        use agui_rs_core::{ReasoningEncryptedValueEvent, ToolCallResultEvent};
+        use agui_rs_core::{ReasoningEncryptedValueEvent, ToolCallResultEvent, ToolResultRole};
 
         #[tokio::test]
         async fn creates_assistant_message_for_parentless_tool_call() {

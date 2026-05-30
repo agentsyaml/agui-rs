@@ -1,5 +1,5 @@
 use agui_rs_core::{Event, Message, Result, RunAgentInput, UserMessageContent};
-use agui_rs_server::{agui_router, channel, RunHandler};
+use agui_rs_server::{agui_router, channel, serve, RunHandler};
 use futures::stream::BoxStream;
 
 struct EchoHandler;
@@ -39,15 +39,6 @@ impl RunHandler for EchoHandler {
 #[tokio::main]
 async fn main() -> Result<()> {
     let app = agui_router(EchoHandler);
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:8000")
-        .await
-        .map_err(|error| agui_rs_core::AgUiError::other(error.to_string()))?;
-
     println!("listening on http://127.0.0.1:8000/");
-
-    ::axum::serve(listener, app)
-        .await
-        .map_err(|error| agui_rs_core::AgUiError::other(error.to_string()))?;
-
-    Ok(())
+    serve("127.0.0.1:8000", app).await
 }

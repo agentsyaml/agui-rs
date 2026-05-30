@@ -7,6 +7,8 @@ mod agent;
 mod apply;
 #[path = "../src/chunks.rs"]
 mod chunks;
+#[path = "../src/interrupts.rs"]
+mod interrupts;
 #[path = "../src/middleware.rs"]
 mod middleware;
 #[path = "../src/subscriber.rs"]

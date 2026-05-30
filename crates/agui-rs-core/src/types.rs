@@ -15,19 +15,14 @@ pub enum Role {
     Reasoning,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum TextMessageRole {
     Developer,
     System,
+    #[default]
     Assistant,
     User,
-}
-
-impl Default for TextMessageRole {
-    fn default() -> Self {
-        Self::Assistant
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -385,25 +380,6 @@ impl RunAgentInput {
 
         Ok(())
     }
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", default)]
-pub struct AgentCapabilities {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub state: Option<Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub messages: Option<Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tools: Option<Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub interrupts: Option<Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub reasoning: Option<Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub activity: Option<Value>,
-    #[serde(flatten)]
-    pub extra: serde_json::Map<String, Value>,
 }
 
 #[cfg(test)]

@@ -195,14 +195,21 @@ async fn should_surface_http_failures() {
         .run(RunAgentInput::new("thread-1", "run-1"))
         .await;
 
-    assert!(matches!(
-        result,
-        Err(AgUiError::Protocol(message))
-            if message.contains("HTTP 404")
-                && message.contains(&url)
-                && message.contains("application/json")
-                && message.contains("User not found")
-    ));
+    let error = result.err().expect("expected an HTTP error");
+    match error {
+        AgUiError::Http {
+            status,
+            url: err_url,
+            content_type,
+            body,
+        } => {
+            assert_eq!(status, 404);
+            assert_eq!(err_url.as_deref(), Some(url.as_str()));
+            assert_eq!(content_type.as_deref(), Some("application/json"));
+            assert!(body.contains("User not found"));
+        }
+        other => panic!("expected HTTP error, got {other:?}"),
+    }
 
     handle.join().expect("join server thread");
 }

@@ -91,7 +91,8 @@ impl Agent for HttpAgent {
             if abort.is_aborted() {
                 AgUiError::Cancelled
             } else {
-                AgUiError::other(format!("request failed: {error}"))
+                let retryable = error.is_connect() || error.is_timeout() || error.is_request();
+                AgUiError::transport(format!("request failed: {error}"), retryable)
             }
         })?;
 
@@ -101,25 +102,19 @@ impl Agent for HttpAgent {
                 .headers()
                 .get(CONTENT_TYPE)
                 .and_then(|value| value.to_str().ok())
-                .unwrap_or_default()
-                .to_string();
+                .map(|value| value.to_string());
             let body = response.text().await.map_err(|error| {
-                AgUiError::other(format!("failed reading error response body: {error}"))
+                AgUiError::transport(
+                    format!("failed reading error response body: {error}"),
+                    error.is_connect() || error.is_timeout(),
+                )
             })?;
-            return Err(AgUiError::protocol(format!(
-                "HTTP {status} from {}{}{}",
-                self.config.url,
-                if content_type.is_empty() {
-                    ""
-                } else {
-                    " (content-type: "
-                },
-                if content_type.is_empty() {
-                    body.clone()
-                } else {
-                    format!("{content_type}) {body}")
-                }
-            )));
+            return Err(AgUiError::Http {
+                status: status.as_u16(),
+                url: Some(self.config.url.clone()),
+                content_type,
+                body,
+            });
         }
 
         if abort.is_aborted() {

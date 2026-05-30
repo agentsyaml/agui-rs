@@ -7,6 +7,7 @@ type VerifyResult<T> = std::result::Result<T, AgUiError>;
 
 #[derive(Debug, Default)]
 struct VerifierState {
+    first_event_received: bool,
     run_started: bool,
     run_finished: bool,
     active_text_message_id: Option<String>,
@@ -44,47 +45,67 @@ where
 
             yield Ok(event);
         }
-
-        if let Err(err) = state.finish() {
-            yield Err(err);
-        }
     }
 }
 
 impl VerifierState {
+    /// Resets per-run state so a new `RUN_STARTED` can begin a fresh run after a
+    /// previous `RUN_FINISHED`. Mirrors `resetRunState()` in the TypeScript
+    /// `verifyEvents`. Note: `run_errored` is intentionally NOT reset — once a
+    /// run errors, the whole stream is permanently terminal.
+    fn reset_run_state(&mut self) {
+        self.run_finished = false;
+        self.run_started = true;
+        self.clear_active_state();
+    }
+
     fn validate_event(&mut self, event: &Event) -> VerifyResult<()> {
-        if self.run_finished {
-            let terminal = if self.run_errored {
-                "RUN_ERROR"
-            } else {
-                "RUN_FINISHED"
-            };
-            let status = if self.run_errored {
-                "errored"
-            } else {
-                "finished"
-            };
+        // RUN_ERROR is permanently terminal: nothing (not even a new run) may
+        // follow it.
+        if self.run_errored {
             return Err(AgUiError::validation(format!(
-                "Cannot send event type '{}': The run has already {status} with '{terminal}'. No further events can be sent.",
+                "Cannot send event type '{}': The run has already errored with 'RUN_ERROR'. No further events can be sent.",
                 event_name(event)
             )));
         }
 
-        if !self.run_started {
-            if !matches!(event, Event::RunStarted(_)) {
+        // After RUN_FINISHED only RUN_ERROR or a new RUN_STARTED may follow.
+        if self.run_finished
+            && !matches!(event, Event::RunError(_))
+            && !matches!(event, Event::RunStarted(_))
+        {
+            return Err(AgUiError::validation(format!(
+                "Cannot send event type '{}': The run has already finished with 'RUN_FINISHED'. Start a new run with 'RUN_STARTED'.",
+                event_name(event)
+            )));
+        }
+
+        // First-event requirement: must be RUN_STARTED or RUN_ERROR.
+        if !self.first_event_received {
+            self.first_event_received = true;
+            if !matches!(event, Event::RunStarted(_) | Event::RunError(_)) {
                 return Err(AgUiError::validation("First event must be 'RUN_STARTED'"));
             }
-            self.run_started = true;
-            return Ok(());
+        } else if matches!(event, Event::RunStarted(_)) {
+            // A RUN_STARTED mid-stream is only valid as the start of a new run
+            // after the previous one finished.
+            if self.run_started && !self.run_finished {
+                return Err(AgUiError::validation(
+                    "Cannot send 'RUN_STARTED' while a run is still active. The previous run must be finished with 'RUN_FINISHED' before starting a new run.",
+                ));
+            }
+            if self.run_finished {
+                self.reset_run_state();
+            }
         }
 
         match event {
-            Event::RunStarted(_) => Err(AgUiError::validation(
-                "Cannot send 'RUN_STARTED' while a run is still active. The previous run must be finished with 'RUN_FINISHED' before starting a new run.",
-            )),
+            Event::RunStarted(_) => {
+                self.run_started = true;
+                Ok(())
+            }
             Event::RunFinished(_) => self.finish_run(),
             Event::RunError(_) => {
-                self.run_finished = true;
                 self.run_errored = true;
                 self.clear_active_state();
                 Ok(())
@@ -116,20 +137,6 @@ impl VerifierState {
             Event::StepFinished(event) => self.finish_step(&event.step_name),
             _ => Ok(()),
         }
-    }
-
-    fn finish(&self) -> VerifyResult<()> {
-        if !self.run_started {
-            return Err(AgUiError::validation("stream ended before 'RUN_STARTED'"));
-        }
-
-        if !self.run_finished {
-            return Err(AgUiError::validation(
-                "stream ended before 'RUN_FINISHED' or 'RUN_ERROR'",
-            ));
-        }
-
-        Ok(())
     }
 
     fn finish_run(&mut self) -> VerifyResult<()> {

@@ -16,7 +16,7 @@ impl EventEmitter {
         self.tx
             .send(Ok(event))
             .await
-            .map_err(|_| AgUiError::other("event stream closed"))
+            .map_err(|_| AgUiError::transport("event stream closed", false))
     }
 
     pub async fn emit_error(&self, err: AgUiError) {

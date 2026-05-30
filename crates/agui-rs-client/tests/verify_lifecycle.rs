@@ -98,5 +98,28 @@ async fn allows_valid_lifecycle_sequence() {
     assert!(out.iter().all(Result::is_ok));
 }
 
-// SKIPPED: should allow RUN_ERROR after RUN_FINISHED: Rust verify_events treats RUN_FINISHED as terminal and rejects every later event, including RUN_ERROR.
-// SKIPPED: should allow RUN_ERROR at any time (even as first event): Rust verify_events requires RUN_STARTED to be the first event in the stream.
+// Ported from TypeScript `verify/__tests__/verify.lifecycle.test.ts`.
+
+#[tokio::test]
+async fn allows_run_error_after_run_finished() {
+    let out = collect(vec![
+        factory::run_started("test-thread-id", "test-run-id"),
+        factory::text_message_start("1"),
+        factory::text_message_end("1"),
+        factory::run_finished("test-thread-id", "test-run-id"),
+        factory::run_error("Test error"),
+    ])
+    .await;
+
+    assert_eq!(out.len(), 5);
+    assert!(out.iter().all(Result::is_ok), "all events should verify: {out:?}");
+    assert!(matches!(out[4], Ok(Event::RunError(_))));
+}
+
+#[tokio::test]
+async fn allows_run_error_as_first_event() {
+    let out = collect(vec![factory::run_error("Test error")]).await;
+
+    assert_eq!(out.len(), 1);
+    assert!(matches!(out[0], Ok(Event::RunError(_))));
+}

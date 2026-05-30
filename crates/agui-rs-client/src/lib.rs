@@ -27,7 +27,10 @@ pub use compact::compact_events;
 pub use debug_logger::DebugLogger;
 pub use error::{AgUiError, Result};
 pub use http::{HttpAgent, HttpAgentConfig, HttpRequestExecutor};
-pub use interrupts::{get_run_outcome, is_interrupt_expired, ResumeResponse};
+pub use interrupts::{
+    ensure_resume_covers, get_run_outcome, interrupt_is_expired, is_interrupt_expired,
+    ResumeResponse,
+};
 pub use legacy::convert_legacy_events;
 pub use middleware::{Middleware, MiddlewareChain};
 pub use subscriber::{

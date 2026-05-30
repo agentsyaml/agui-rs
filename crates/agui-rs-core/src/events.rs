@@ -11,79 +11,47 @@ pub struct BaseEventFields {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum EventType {
-    #[serde(rename = "TEXT_MESSAGE_START")]
     TextMessageStart,
-    #[serde(rename = "TEXT_MESSAGE_CONTENT")]
     TextMessageContent,
-    #[serde(rename = "TEXT_MESSAGE_END")]
     TextMessageEnd,
-    #[serde(rename = "TEXT_MESSAGE_CHUNK")]
     TextMessageChunk,
 
-    #[serde(rename = "TOOL_CALL_START")]
     ToolCallStart,
-    #[serde(rename = "TOOL_CALL_ARGS")]
     ToolCallArgs,
-    #[serde(rename = "TOOL_CALL_END")]
     ToolCallEnd,
-    #[serde(rename = "TOOL_CALL_CHUNK")]
     ToolCallChunk,
-    #[serde(rename = "TOOL_CALL_RESULT")]
     ToolCallResult,
 
-    #[serde(rename = "STATE_SNAPSHOT")]
     StateSnapshot,
-    #[serde(rename = "STATE_DELTA")]
     StateDelta,
-    #[serde(rename = "MESSAGES_SNAPSHOT")]
     MessagesSnapshot,
 
-    #[serde(rename = "ACTIVITY_SNAPSHOT")]
     ActivitySnapshot,
-    #[serde(rename = "ACTIVITY_DELTA")]
     ActivityDelta,
 
-    #[serde(rename = "RAW")]
     Raw,
-    #[serde(rename = "CUSTOM")]
     Custom,
 
-    #[serde(rename = "RUN_STARTED")]
     RunStarted,
-    #[serde(rename = "RUN_FINISHED")]
     RunFinished,
-    #[serde(rename = "RUN_ERROR")]
     RunError,
-    #[serde(rename = "STEP_STARTED")]
     StepStarted,
-    #[serde(rename = "STEP_FINISHED")]
     StepFinished,
 
-    #[serde(rename = "REASONING_START")]
     ReasoningStart,
-    #[serde(rename = "REASONING_MESSAGE_START")]
     ReasoningMessageStart,
-    #[serde(rename = "REASONING_MESSAGE_CONTENT")]
     ReasoningMessageContent,
-    #[serde(rename = "REASONING_MESSAGE_END")]
     ReasoningMessageEnd,
-    #[serde(rename = "REASONING_MESSAGE_CHUNK")]
     ReasoningMessageChunk,
-    #[serde(rename = "REASONING_END")]
     ReasoningEnd,
-    #[serde(rename = "REASONING_ENCRYPTED_VALUE")]
     ReasoningEncryptedValue,
 
-    #[serde(rename = "THINKING_START")]
     ThinkingStart,
-    #[serde(rename = "THINKING_END")]
     ThinkingEnd,
-    #[serde(rename = "THINKING_TEXT_MESSAGE_START")]
     ThinkingTextMessageStart,
-    #[serde(rename = "THINKING_TEXT_MESSAGE_CONTENT")]
     ThinkingTextMessageContent,
-    #[serde(rename = "THINKING_TEXT_MESSAGE_END")]
     ThinkingTextMessageEnd,
 }
 
@@ -435,160 +403,107 @@ pub struct ThinkingTextMessageEndEvent {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type")]
+#[serde(tag = "type", rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum Event {
-    #[serde(rename = "TEXT_MESSAGE_START")]
     TextMessageStart(TextMessageStartEvent),
-    #[serde(rename = "TEXT_MESSAGE_CONTENT")]
     TextMessageContent(TextMessageContentEvent),
-    #[serde(rename = "TEXT_MESSAGE_END")]
     TextMessageEnd(TextMessageEndEvent),
-    #[serde(rename = "TEXT_MESSAGE_CHUNK")]
     TextMessageChunk(TextMessageChunkEvent),
 
-    #[serde(rename = "TOOL_CALL_START")]
     ToolCallStart(ToolCallStartEvent),
-    #[serde(rename = "TOOL_CALL_ARGS")]
     ToolCallArgs(ToolCallArgsEvent),
-    #[serde(rename = "TOOL_CALL_END")]
     ToolCallEnd(ToolCallEndEvent),
-    #[serde(rename = "TOOL_CALL_CHUNK")]
     ToolCallChunk(ToolCallChunkEvent),
-    #[serde(rename = "TOOL_CALL_RESULT")]
     ToolCallResult(ToolCallResultEvent),
 
-    #[serde(rename = "STATE_SNAPSHOT")]
     StateSnapshot(StateSnapshotEvent),
-    #[serde(rename = "STATE_DELTA")]
     StateDelta(StateDeltaEvent),
-    #[serde(rename = "MESSAGES_SNAPSHOT")]
     MessagesSnapshot(MessagesSnapshotEvent),
 
-    #[serde(rename = "ACTIVITY_SNAPSHOT")]
     ActivitySnapshot(ActivitySnapshotEvent),
-    #[serde(rename = "ACTIVITY_DELTA")]
     ActivityDelta(ActivityDeltaEvent),
 
-    #[serde(rename = "RAW")]
     Raw(RawEvent),
-    #[serde(rename = "CUSTOM")]
     Custom(CustomEvent),
 
-    #[serde(rename = "RUN_STARTED")]
     RunStarted(RunStartedEvent),
-    #[serde(rename = "RUN_FINISHED")]
     RunFinished(RunFinishedEvent),
-    #[serde(rename = "RUN_ERROR")]
     RunError(RunErrorEvent),
-    #[serde(rename = "STEP_STARTED")]
     StepStarted(StepStartedEvent),
-    #[serde(rename = "STEP_FINISHED")]
     StepFinished(StepFinishedEvent),
 
-    #[serde(rename = "REASONING_START")]
     ReasoningStart(ReasoningStartEvent),
-    #[serde(rename = "REASONING_MESSAGE_START")]
     ReasoningMessageStart(ReasoningMessageStartEvent),
-    #[serde(rename = "REASONING_MESSAGE_CONTENT")]
     ReasoningMessageContent(ReasoningMessageContentEvent),
-    #[serde(rename = "REASONING_MESSAGE_END")]
     ReasoningMessageEnd(ReasoningMessageEndEvent),
-    #[serde(rename = "REASONING_MESSAGE_CHUNK")]
     ReasoningMessageChunk(ReasoningMessageChunkEvent),
-    #[serde(rename = "REASONING_END")]
     ReasoningEnd(ReasoningEndEvent),
-    #[serde(rename = "REASONING_ENCRYPTED_VALUE")]
     ReasoningEncryptedValue(ReasoningEncryptedValueEvent),
 
-    #[serde(rename = "THINKING_START")]
     ThinkingStart(ThinkingStartEvent),
-    #[serde(rename = "THINKING_END")]
     ThinkingEnd(ThinkingEndEvent),
-    #[serde(rename = "THINKING_TEXT_MESSAGE_START")]
     ThinkingTextMessageStart(ThinkingTextMessageStartEvent),
-    #[serde(rename = "THINKING_TEXT_MESSAGE_CONTENT")]
     ThinkingTextMessageContent(ThinkingTextMessageContentEvent),
-    #[serde(rename = "THINKING_TEXT_MESSAGE_END")]
     ThinkingTextMessageEnd(ThinkingTextMessageEndEvent),
 }
 
-impl Event {
-    pub fn event_type(&self) -> EventType {
-        match self {
-            Self::TextMessageStart(_) => EventType::TextMessageStart,
-            Self::TextMessageContent(_) => EventType::TextMessageContent,
-            Self::TextMessageEnd(_) => EventType::TextMessageEnd,
-            Self::TextMessageChunk(_) => EventType::TextMessageChunk,
-            Self::ToolCallStart(_) => EventType::ToolCallStart,
-            Self::ToolCallArgs(_) => EventType::ToolCallArgs,
-            Self::ToolCallEnd(_) => EventType::ToolCallEnd,
-            Self::ToolCallChunk(_) => EventType::ToolCallChunk,
-            Self::ToolCallResult(_) => EventType::ToolCallResult,
-            Self::StateSnapshot(_) => EventType::StateSnapshot,
-            Self::StateDelta(_) => EventType::StateDelta,
-            Self::MessagesSnapshot(_) => EventType::MessagesSnapshot,
-            Self::ActivitySnapshot(_) => EventType::ActivitySnapshot,
-            Self::ActivityDelta(_) => EventType::ActivityDelta,
-            Self::Raw(_) => EventType::Raw,
-            Self::Custom(_) => EventType::Custom,
-            Self::RunStarted(_) => EventType::RunStarted,
-            Self::RunFinished(_) => EventType::RunFinished,
-            Self::RunError(_) => EventType::RunError,
-            Self::StepStarted(_) => EventType::StepStarted,
-            Self::StepFinished(_) => EventType::StepFinished,
-            Self::ReasoningStart(_) => EventType::ReasoningStart,
-            Self::ReasoningMessageStart(_) => EventType::ReasoningMessageStart,
-            Self::ReasoningMessageContent(_) => EventType::ReasoningMessageContent,
-            Self::ReasoningMessageEnd(_) => EventType::ReasoningMessageEnd,
-            Self::ReasoningMessageChunk(_) => EventType::ReasoningMessageChunk,
-            Self::ReasoningEnd(_) => EventType::ReasoningEnd,
-            Self::ReasoningEncryptedValue(_) => EventType::ReasoningEncryptedValue,
-            Self::ThinkingStart(_) => EventType::ThinkingStart,
-            Self::ThinkingEnd(_) => EventType::ThinkingEnd,
-            Self::ThinkingTextMessageStart(_) => EventType::ThinkingTextMessageStart,
-            Self::ThinkingTextMessageContent(_) => EventType::ThinkingTextMessageContent,
-            Self::ThinkingTextMessageEnd(_) => EventType::ThinkingTextMessageEnd,
-        }
-    }
+/// Generates [`Event::event_type`] and [`Event::base`] from a single variant
+/// list, keeping the two dispatch tables in lockstep as variants are added.
+macro_rules! impl_event_dispatch {
+    ($($variant:ident),+ $(,)?) => {
+        impl Event {
+            /// Returns the [`EventType`] discriminant for this event.
+            pub fn event_type(&self) -> EventType {
+                match self {
+                    $(Self::$variant(_) => EventType::$variant,)+
+                }
+            }
 
-    pub fn base(&self) -> &BaseEventFields {
-        match self {
-            Self::TextMessageStart(e) => &e.base,
-            Self::TextMessageContent(e) => &e.base,
-            Self::TextMessageEnd(e) => &e.base,
-            Self::TextMessageChunk(e) => &e.base,
-            Self::ToolCallStart(e) => &e.base,
-            Self::ToolCallArgs(e) => &e.base,
-            Self::ToolCallEnd(e) => &e.base,
-            Self::ToolCallChunk(e) => &e.base,
-            Self::ToolCallResult(e) => &e.base,
-            Self::StateSnapshot(e) => &e.base,
-            Self::StateDelta(e) => &e.base,
-            Self::MessagesSnapshot(e) => &e.base,
-            Self::ActivitySnapshot(e) => &e.base,
-            Self::ActivityDelta(e) => &e.base,
-            Self::Raw(e) => &e.base,
-            Self::Custom(e) => &e.base,
-            Self::RunStarted(e) => &e.base,
-            Self::RunFinished(e) => &e.base,
-            Self::RunError(e) => &e.base,
-            Self::StepStarted(e) => &e.base,
-            Self::StepFinished(e) => &e.base,
-            Self::ReasoningStart(e) => &e.base,
-            Self::ReasoningMessageStart(e) => &e.base,
-            Self::ReasoningMessageContent(e) => &e.base,
-            Self::ReasoningMessageEnd(e) => &e.base,
-            Self::ReasoningMessageChunk(e) => &e.base,
-            Self::ReasoningEnd(e) => &e.base,
-            Self::ReasoningEncryptedValue(e) => &e.base,
-            Self::ThinkingStart(e) => &e.base,
-            Self::ThinkingEnd(e) => &e.base,
-            Self::ThinkingTextMessageStart(e) => &e.base,
-            Self::ThinkingTextMessageContent(e) => &e.base,
-            Self::ThinkingTextMessageEnd(e) => &e.base,
+            /// Returns the shared [`BaseEventFields`] carried by every event.
+            pub fn base(&self) -> &BaseEventFields {
+                match self {
+                    $(Self::$variant(e) => &e.base,)+
+                }
+            }
         }
-    }
+    };
 }
+
+impl_event_dispatch!(
+    TextMessageStart,
+    TextMessageContent,
+    TextMessageEnd,
+    TextMessageChunk,
+    ToolCallStart,
+    ToolCallArgs,
+    ToolCallEnd,
+    ToolCallChunk,
+    ToolCallResult,
+    StateSnapshot,
+    StateDelta,
+    MessagesSnapshot,
+    ActivitySnapshot,
+    ActivityDelta,
+    Raw,
+    Custom,
+    RunStarted,
+    RunFinished,
+    RunError,
+    StepStarted,
+    StepFinished,
+    ReasoningStart,
+    ReasoningMessageStart,
+    ReasoningMessageContent,
+    ReasoningMessageEnd,
+    ReasoningMessageChunk,
+    ReasoningEnd,
+    ReasoningEncryptedValue,
+    ThinkingStart,
+    ThinkingEnd,
+    ThinkingTextMessageStart,
+    ThinkingTextMessageContent,
+    ThinkingTextMessageEnd,
+);
 
 pub mod factory {
     use super::*;

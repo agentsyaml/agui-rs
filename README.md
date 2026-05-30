@@ -14,6 +14,49 @@ state/messages reduction, and an `axum`-based server.
 
 ---
 
+## Upstream tracking status
+
+The **single source of truth** for this SDK is the official TypeScript SDK in
+the [`ag-ui-protocol/ag-ui`](https://github.com/ag-ui-protocol/ag-ui) monorepo
+(`sdks/typescript/packages/{core,client,encoder}`). All protocol types, events,
+wire format, and runtime behaviour are aligned to it; Rust-specific ergonomics
+are layered on top without diverging from that contract.
+
+| Tracked upstream | Value |
+| ---------------- | ----- |
+| TypeScript SDK packages | `@ag-ui/core` / `@ag-ui/client` / `@ag-ui/encoder` **0.0.54** |
+| Monorepo commit | `f30021b9` (2026-05-29) |
+| Reviewed | 2026-05-30 |
+| Examples baseline | `integrations/server-starter-all-features` |
+
+Full field-by-field audit: **[`docs/typescript-alignment.md`](docs/typescript-alignment.md)**.
+Change history: **[`CHANGELOG.md`](CHANGELOG.md)**.
+
+### Alignment snapshot
+
+| Area | TypeScript SDK (source of truth) | This SDK | Status |
+| ---- | -------------------------------- | -------- | ------ |
+| Wire format (`type` discriminator, `camelCase`) | `SCREAMING_SNAKE_CASE` types | identical | ✅ aligned |
+| Event surface | 33 + 5 deprecated `THINKING_*` | identical set + wire names | ✅ aligned |
+| `State` typing | `State = any` (untyped) | `State = Value` (untyped) | ✅ aligned |
+| Error model | `is_retryable()` / `is_user_input()` | structured `Http`/`Transport` + same classifiers | ✅ aligned |
+| Interrupt resume enforcement (`pendingInterrupts`) | enforced in `AbstractAgent` | `AgentRunner::pending_interrupts` + `ensure_resume_covers` | ✅ aligned |
+| Protobuf encode/decode | supported | surface only (`Unsupported`) | ⚠️ gap |
+| `getCapabilities()` / `clone()` / `connect()` / `events$` | present | not yet | ⚠️ gap |
+| Server side | (none — TS is client-only) | `agui-rs-server` (axum) | ➕ Rust extra |
+
+### Design note — state stays untyped (TS-aligned)
+
+The canonical TS/Python SDKs keep `state` untyped (`State = any`); this SDK
+matches that with `type State = serde_json::Value`. The community Rust SDK's
+generic `Agent<StateT, FwdPropsT>` / `Event<StateT>` model is **not adopted** —
+it would ripple through all five crates and diverge from the source of truth.
+If typed ergonomics are wanted later, they will be added as an **opt-in boundary
+helper** (e.g. a typed accessor on `RunAgentResult`) rather than threading a
+`StateT` parameter through `Event`.
+
+---
+
 ## Workspace layout
 
 | Crate            | Purpose                                                                 |

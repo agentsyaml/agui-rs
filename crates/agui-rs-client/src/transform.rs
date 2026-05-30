@@ -4,8 +4,7 @@ use bytes::Bytes;
 use eventsource_stream::Eventsource;
 use futures::{stream::BoxStream, Stream, StreamExt, TryStreamExt};
 
-pub const AGUI_MEDIA_TYPE_PROTOBUF: &str = "application/vnd.ag-ui.event+proto";
-pub const AGUI_MEDIA_TYPE_SSE: &str = "text/event-stream";
+pub use agui_rs_core::{AGUI_MEDIA_TYPE_PROTOBUF, AGUI_MEDIA_TYPE_SSE};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StreamFormat {
@@ -29,10 +28,10 @@ where
     E: std::fmt::Display + Send + 'static,
 {
     Box::pin(try_stream! {
-        let mapped = stream.map_err(|error| AgUiError::other(error.to_string()));
+        let mapped = stream.map_err(|error| AgUiError::transport(error.to_string(), true));
         let mut stream = mapped.eventsource();
         while let Some(item) = stream.next().await {
-            let event = item.map_err(|error| AgUiError::other(error.to_string()))?;
+            let event = item.map_err(|error| AgUiError::transport(error.to_string(), true))?;
             let parsed = serde_json::from_str::<Event>(&event.data)?;
             yield parsed;
         }

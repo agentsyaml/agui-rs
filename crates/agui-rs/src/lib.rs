@@ -18,7 +18,8 @@
 //! agui-rs = { version = "0.1", features = ["full"] }
 //! ```
 //!
-//! ```rust
+//! ```ignore
+//! // Requires the `client` feature: agui-rs = { version = "0.1", features = ["client"] }
 //! use agui_rs::client::{HttpAgent, AgentRunner};
 //! use agui_rs::prelude::*;
 //! ```

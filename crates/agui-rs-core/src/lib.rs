@@ -11,7 +11,18 @@ pub mod event_factories;
 pub mod events;
 pub mod types;
 
-pub use capabilities::Capabilities;
+/// The IANA-style media type for AG-UI events encoded as protobuf.
+pub const AGUI_MEDIA_TYPE_PROTOBUF: &str = "application/vnd.ag-ui.event+proto";
+/// The media type for AG-UI events streamed as Server-Sent Events.
+pub const AGUI_MEDIA_TYPE_SSE: &str = "text/event-stream";
+
+pub use capabilities::{
+    AgentCapabilities, Capabilities, ExecutionCapabilities, HumanInTheLoopCapabilities,
+    IdentityCapabilities, MultiAgentCapabilities, MultimodalCapabilities,
+    MultimodalInputCapabilities, MultimodalOutputCapabilities, OutputCapabilities,
+    ReasoningCapabilities, StateCapabilities, SubAgentInfo, ToolsCapabilities,
+    TransportCapabilities,
+};
 pub use error::{AgUiError, Result};
 pub use events::{
     factory, ActivityDeltaEvent, ActivitySnapshotEvent, BaseEventFields, CustomEvent, Event,
@@ -26,7 +37,7 @@ pub use events::{
     ToolCallChunkEvent, ToolCallEndEvent, ToolCallResultEvent, ToolCallStartEvent, ToolResultRole,
 };
 pub use types::{
-    AgentCapabilities, BinaryInputContent, Context, FunctionCall, InputContent, InputContentSource,
+    BinaryInputContent, Context, FunctionCall, InputContent, InputContentSource,
     Interrupt, Message, ResumeEntry, ResumeStatus, Role, RunAgentInput, State, TextMessageRole,
     Tool, ToolCall, ToolCallKind, UserMessageContent,
 };

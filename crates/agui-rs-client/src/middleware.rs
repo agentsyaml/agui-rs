@@ -130,13 +130,13 @@ pub mod filter_tool_calls {
             disallowed_tool_calls: Option<Vec<String>>,
         ) -> std::result::Result<Self, AgUiError> {
             if allowed_tool_calls.is_some() && disallowed_tool_calls.is_some() {
-                return Err(AgUiError::other(
+                return Err(AgUiError::validation(
                     "Cannot specify both allowedToolCalls and disallowedToolCalls",
                 ));
             }
 
             if allowed_tool_calls.is_none() && disallowed_tool_calls.is_none() {
-                return Err(AgUiError::other(
+                return Err(AgUiError::validation(
                     "Must specify either allowedToolCalls or disallowedToolCalls",
                 ));
             }

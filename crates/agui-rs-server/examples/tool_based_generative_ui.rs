@@ -13,10 +13,10 @@
 
 use agui_rs_core::types::{AssistantMessage, ToolMessage};
 use agui_rs_core::{
-    factory, AgUiError, Event, FunctionCall, Message, MessagesSnapshotEvent, Result, RunAgentInput,
+    factory, Event, FunctionCall, Message, MessagesSnapshotEvent, Result, RunAgentInput,
     ToolCall, ToolCallKind, UserMessageContent,
 };
-use agui_rs_server::{agui_router, channel, RunHandler};
+use agui_rs_server::{agui_router, channel, serve, RunHandler};
 use futures::stream::BoxStream;
 use serde_json::json;
 
@@ -112,15 +112,6 @@ impl RunHandler for ToolBasedGenerativeUiHandler {
 #[tokio::main]
 async fn main() -> Result<()> {
     let app = agui_router(ToolBasedGenerativeUiHandler);
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:8000")
-        .await
-        .map_err(|error| AgUiError::other(error.to_string()))?;
-
     println!("tool_based_generative_ui listening on http://127.0.0.1:8000/");
-
-    ::axum::serve(listener, app)
-        .await
-        .map_err(|error| AgUiError::other(error.to_string()))?;
-
-    Ok(())
+    serve("127.0.0.1:8000", app).await
 }

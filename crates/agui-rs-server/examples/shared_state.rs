@@ -8,8 +8,8 @@
 //! Run with:
 //!   cargo run -p agui-rs-server --example shared_state
 
-use agui_rs_core::{factory, AgUiError, Event, Result, RunAgentInput};
-use agui_rs_server::{agui_router, channel, RunHandler};
+use agui_rs_core::{factory, Event, Result, RunAgentInput};
+use agui_rs_server::{agui_router, channel, serve, RunHandler};
 use futures::stream::BoxStream;
 use serde_json::json;
 
@@ -58,15 +58,6 @@ impl RunHandler for SharedStateHandler {
 #[tokio::main]
 async fn main() -> Result<()> {
     let app = agui_router(SharedStateHandler);
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:8000")
-        .await
-        .map_err(|error| AgUiError::other(error.to_string()))?;
-
     println!("shared_state listening on http://127.0.0.1:8000/");
-
-    ::axum::serve(listener, app)
-        .await
-        .map_err(|error| AgUiError::other(error.to_string()))?;
-
-    Ok(())
+    serve("127.0.0.1:8000", app).await
 }

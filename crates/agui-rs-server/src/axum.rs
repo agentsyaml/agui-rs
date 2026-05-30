@@ -21,6 +21,22 @@ pub fn agui_route<H: RunHandler>(handler: H) -> MethodRouter {
     post(run_agent::<H>).with_state(Arc::new(handler))
 }
 
+/// Binds to `addr` and serves the given router until the process exits.
+///
+/// A convenience wrapper around `TcpListener::bind` + `axum::serve` that maps
+/// I/O failures to [`agui_rs_core::AgUiError::Transport`]. Intended for examples
+/// and simple binaries; production servers will usually wire up their own
+/// listener with graceful shutdown.
+pub async fn serve(addr: &str, router: Router) -> agui_rs_core::Result<()> {
+    let listener = tokio::net::TcpListener::bind(addr)
+        .await
+        .map_err(|error| agui_rs_core::AgUiError::transport(error.to_string(), false))?;
+    ::axum::serve(listener, router)
+        .await
+        .map_err(|error| agui_rs_core::AgUiError::transport(error.to_string(), false))?;
+    Ok(())
+}
+
 async fn run_agent<H: RunHandler>(
     State(handler): State<Arc<H>>,
     headers: HeaderMap,

@@ -13,10 +13,10 @@
 
 use agui_rs_core::types::{AssistantMessage, ToolMessage};
 use agui_rs_core::{
-    factory, AgUiError, Event, FunctionCall, Message, MessagesSnapshotEvent, Result, RunAgentInput,
+    factory, Event, FunctionCall, Message, MessagesSnapshotEvent, Result, RunAgentInput,
     ToolCall, ToolCallKind,
 };
-use agui_rs_server::{agui_router, channel, EventEmitter, RunHandler};
+use agui_rs_server::{agui_router, channel, serve, EventEmitter, RunHandler};
 use futures::stream::BoxStream;
 use serde_json::json;
 
@@ -112,15 +112,6 @@ async fn send_backend_tool_call(emitter: &EventEmitter, run_id: &str, history: V
 #[tokio::main]
 async fn main() -> Result<()> {
     let app = agui_router(BackendToolRenderingHandler);
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:8000")
-        .await
-        .map_err(|error| AgUiError::other(error.to_string()))?;
-
     println!("backend_tool_rendering listening on http://127.0.0.1:8000/");
-
-    ::axum::serve(listener, app)
-        .await
-        .map_err(|error| AgUiError::other(error.to_string()))?;
-
-    Ok(())
+    serve("127.0.0.1:8000", app).await
 }

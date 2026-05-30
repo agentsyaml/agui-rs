@@ -12,7 +12,7 @@ pub mod error;
 pub mod handler;
 pub mod sse;
 
-pub use crate::axum::{agui_route, agui_router};
+pub use crate::axum::{agui_route, agui_router, serve};
 pub use crate::emit::{channel, EventEmitter, EventSink};
 pub use crate::error::{AgUiError, Result};
 pub use crate::handler::{RunContext, RunHandler};

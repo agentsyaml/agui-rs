@@ -1,5 +1,6 @@
 use crate::apply::default_apply_events;
 use crate::chunks::expand_chunks;
+use crate::interrupts::ensure_resume_covers;
 use crate::middleware::{MiddlewareChain, MiddlewareInput};
 use crate::subscriber::{
     ActivityDeltaContext, ActivitySnapshotContext, AgentSubscriber, EventContext, InterruptContext,
@@ -9,8 +10,8 @@ use crate::subscriber::{
 };
 use crate::verify::verify_events;
 use agui_rs_core::{
-    AgUiError, Context, Event, Message, Result, RunAgentInput, RunFinishedOutcome, State, Tool,
-    ToolCall,
+    AgUiError, Context, Event, Interrupt, Message, Result, RunAgentInput, RunFinishedOutcome,
+    State, Tool, ToolCall,
 };
 use async_trait::async_trait;
 use futures::{future::BoxFuture, stream::BoxStream, StreamExt};
@@ -23,19 +24,10 @@ use tokio::sync::Notify;
 
 pub type EventStream = BoxStream<'static, Result<Event>>;
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 struct AbortState {
     aborted: AtomicBool,
     notify: Notify,
-}
-
-impl Default for AbortState {
-    fn default() -> Self {
-        Self {
-            aborted: AtomicBool::new(false),
-            notify: Notify::new(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -147,6 +139,18 @@ pub struct AgentRunner<A: Agent + 'static> {
     messages: Vec<Message>,
     state: State,
     thread_id: String,
+    pending_interrupts: Vec<Interrupt>,
+    now_fn: Arc<dyn Fn() -> String + Send + Sync>,
+}
+
+/// Default "now" provider used for interrupt-expiry checks.
+///
+/// `agui-rs-core`/`-client` deliberately avoid a date dependency, so the
+/// baseline clock returns an empty string — lexicographically less than any
+/// real ISO-8601 timestamp, meaning no interrupt is ever considered expired
+/// unless the caller injects a real clock via [`AgentRunner::with_now_fn`].
+fn default_now() -> String {
+    String::new()
 }
 
 impl<A: Agent + 'static> AgentRunner<A> {
@@ -162,6 +166,8 @@ impl<A: Agent + 'static> AgentRunner<A> {
             state: config.initial_state.clone(),
             thread_id,
             subscriber: None,
+            pending_interrupts: Vec::new(),
+            now_fn: Arc::new(default_now),
         }
     }
 
@@ -175,6 +181,25 @@ impl<A: Agent + 'static> AgentRunner<A> {
         self
     }
 
+    /// Injects a custom "now" provider (ISO-8601) used to evaluate interrupt
+    /// expiry before a resuming run. Defaults to a clock that never expires
+    /// interrupts (see [`default_now`]).
+    pub fn with_now_fn<F>(mut self, now_fn: F) -> Self
+    where
+        F: Fn() -> String + Send + Sync + 'static,
+    {
+        self.now_fn = Arc::new(now_fn);
+        self
+    }
+
+    /// Interrupts emitted by the most recent run that have not yet been
+    /// resolved. Populated when `RUN_FINISHED` carries an interrupt outcome and
+    /// cleared when a later run completes successfully — mirroring the
+    /// TypeScript `AbstractAgent.pendingInterrupts` field.
+    pub fn pending_interrupts(&self) -> &[Interrupt] {
+        &self.pending_interrupts
+    }
+
     pub async fn run_agent(&mut self, params: RunAgentParameters) -> Result<RunAgentResult> {
         self.run_agent_cancellable(params, AbortHandle::new()).await
     }
@@ -186,6 +211,15 @@ impl<A: Agent + 'static> AgentRunner<A> {
     ) -> Result<RunAgentResult> {
         let starting_messages_len = self.messages.len();
         let run_id = params.run_id.clone().unwrap_or_else(|| generate_id("run"));
+
+        // Mirror TS AbstractAgent.onInitialize: a run that follows interrupts
+        // must address every still-open interrupt via `resume`, and none of
+        // them may have expired.
+        if !self.pending_interrupts.is_empty() {
+            let now_iso = (self.now_fn)();
+            ensure_resume_covers(&self.pending_interrupts, &params.resume, &now_iso)?;
+        }
+
         let input = RunAgentInput {
             thread_id: self.thread_id.clone(),
             run_id: run_id.clone(),
@@ -744,6 +778,18 @@ impl<A: Agent + 'static> AgentRunner<A> {
 
         self.messages = context.messages.clone();
         self.state = context.state.clone();
+
+        // Mirror TS apply RUN_FINISHED handling: track unresolved interrupts so
+        // the next run can enforce that they are addressed; clear them on a
+        // successful (non-interrupt) outcome.
+        match &outcome {
+            Some(RunFinishedOutcome::Interrupt { interrupts }) => {
+                self.pending_interrupts = interrupts.clone();
+            }
+            _ => {
+                self.pending_interrupts.clear();
+            }
+        }
 
         if let Some(subscriber) = &self.subscriber {
             subscriber.on_run_finished(&context).await;

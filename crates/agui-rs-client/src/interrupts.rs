@@ -1,10 +1,10 @@
 use std::collections::{HashMap, HashSet};
 
-use agui_rs_core::{Event, Interrupt, ResumeEntry, ResumeStatus, RunFinishedOutcome};
+use agui_rs_core::{
+    AgUiError, Event, Interrupt, Result, ResumeEntry, ResumeStatus, RunFinishedOutcome,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-
-use crate::{AgUiError, Result};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
@@ -60,6 +60,73 @@ pub fn is_interrupt_expired(interrupt: &Event, now_iso: &str) -> bool {
         },
         _ => false,
     }
+}
+
+/// Checks whether a single [`Interrupt`] has expired relative to an ISO-8601
+/// `now` timestamp.
+///
+/// Mirrors the TypeScript `isInterruptExpired(interrupt, now)` helper: an
+/// interrupt with no `expiresAt` never expires; otherwise it is expired once
+/// `expiresAt <= now`. Comparison is lexicographic, which is correct for
+/// normalized (UTC, same-precision) ISO-8601 strings — the form the protocol
+/// emits.
+pub fn interrupt_is_expired(interrupt: &Interrupt, now_iso: &str) -> bool {
+    match interrupt.expires_at.as_deref() {
+        Some(expires_at) => expires_at <= now_iso,
+        None => false,
+    }
+}
+
+/// Validates that `resume` entries address every still-open interrupt and that
+/// none of those interrupts has expired.
+///
+/// Mirrors the enforcement TypeScript `AbstractAgent.onInitialize` performs
+/// before a run when `pendingInterrupts` is non-empty:
+/// - every pending interrupt id must appear in `resume`, otherwise a
+///   [`AgUiError::Validation`] listing the uncovered ids is returned;
+/// - any pending interrupt whose `expiresAt <= now_iso` is rejected.
+///
+/// `now_iso` is the current time as an ISO-8601 string; pass the producer's
+/// clock so the check stays dependency-free in `agui-rs-core`/`-client`.
+pub fn ensure_resume_covers(
+    pending: &[Interrupt],
+    resume: &[ResumeEntry],
+    now_iso: &str,
+) -> Result<()> {
+    if pending.is_empty() {
+        return Ok(());
+    }
+
+    let resumed_ids: HashSet<&str> = resume
+        .iter()
+        .map(|entry| entry.interrupt_id.as_str())
+        .collect();
+
+    let mut uncovered: Vec<&str> = pending
+        .iter()
+        .map(|interrupt| interrupt.id.as_str())
+        .filter(|id| !resumed_ids.contains(id))
+        .collect();
+    uncovered.sort_unstable();
+    if !uncovered.is_empty() {
+        return Err(AgUiError::validation(format!(
+            "Thread has {} pending interrupt(s) not addressed by resume: {}",
+            uncovered.len(),
+            uncovered.join(", ")
+        )));
+    }
+
+    for interrupt in pending {
+        if interrupt_is_expired(interrupt, now_iso) {
+            return Err(AgUiError::validation(format!(
+                "Interrupt {} expired at {}",
+                interrupt.id,
+                interrupt.expires_at.as_deref().unwrap_or_default()
+            )));
+        }
+    }
+
+    Ok(())
 }
 
 /// Builds resume entries in interrupt order.

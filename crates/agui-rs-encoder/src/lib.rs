@@ -1,7 +1,6 @@
 use agui_rs_core::{AgUiError, Event, Result};
 
-pub const AGUI_MEDIA_TYPE_PROTOBUF: &str = "application/vnd.ag-ui.event+proto";
-pub const AGUI_MEDIA_TYPE_SSE: &str = "text/event-stream";
+pub use agui_rs_core::{AGUI_MEDIA_TYPE_PROTOBUF, AGUI_MEDIA_TYPE_SSE};
 
 #[derive(Debug, Clone, Default)]
 pub struct EventEncoder {
