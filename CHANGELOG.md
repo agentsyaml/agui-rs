@@ -52,6 +52,19 @@ are layered on top without diverging from that contract.
   custom` + `SubAgentInfo`); interrupt flags now live on
   `HumanInTheLoopCapabilities`. `Capabilities` remains as a type alias.
   **Breaking** for any code using the old capability field names.
+- **`compact_events` now performs state compaction.** Previously it merged only
+  text/tool-call/reasoning deltas and silently dropped `STATE_SNAPSHOT` /
+  `STATE_DELTA` reduction — a blind spot found by the full test-case
+  reconciliation (no `// SKIPPED:` marker existed). It now collects state events
+  per run and flushes a single reduced `STATE_SNAPSHOT` (JSON-Patch applied) at
+  `RUN_STARTED` (pre-/inter-run), `RUN_FINISHED` / `RUN_ERROR`, and end —
+  matching canonical `compact.ts`.
+
+### Added (docs/tooling)
+- `docs/test-reconciliation.md`: per-file, per-case TS⇄Rust reconciliation with
+  classification of every file where Rust coverage is below the TS case count.
+- `scripts/reconcile.ps1` + `scripts/titles.ps1`: reproducible tooling that
+  enumerates TS cases and maps them to Rust ported/skipped counts.
 
 ### Notes
 - `agui-rs-core` / `agui-rs-client` remain free of any date dependency; interrupt
@@ -61,9 +74,13 @@ are layered on top without diverging from that contract.
   `verify/__tests__/verify.multiple-runs.test.ts` (6),
   `verify/__tests__/verify.lifecycle.test.ts` (2),
   `agent/__tests__/interrupts-lifecycle.test.ts` (6),
-  `core/__tests__/capabilities-interrupts.test.ts` (rewritten for canonical shape).
+  `core/__tests__/capabilities-interrupts.test.ts` (rewritten for canonical shape),
+  `compact/__tests__/compact.test.ts` "State Compaction" (13).
+- Full per-file test reconciliation recorded in `docs/test-reconciliation.md`
+  (568 TS cases in scope; 484 ported, 76 explicit `SKIPPED` markers; every
+  below-coverage file classified).
 - Verified: `cargo build --workspace --examples`, `cargo clippy --workspace
-  --all-targets` (zero warnings), `cargo test --workspace` (1210 tests passing).
+  --all-targets` (zero warnings), `cargo test --workspace` (1223 tests passing).
 
 ## [0.1.0] - 2026-05-29
 
