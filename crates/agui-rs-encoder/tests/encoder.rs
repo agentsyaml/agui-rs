@@ -1,4 +1,4 @@
-use agui_rs_core::{factory, AgUiError};
+use agui_rs_core::factory;
 use agui_rs_encoder::{EventEncoder, AGUI_MEDIA_TYPE_PROTOBUF, AGUI_MEDIA_TYPE_SSE};
 
 fn sample_event() -> agui_rs_core::Event {
@@ -66,36 +66,30 @@ fn protobuf_accept_header_switches_content_negotiation() {
 }
 
 #[test]
-fn encode_binary_returns_unsupported_when_protobuf_is_requested() {
+fn encode_binary_returns_length_prefixed_protobuf_when_requested() {
     let encoder = EventEncoder::with_accept(Some(AGUI_MEDIA_TYPE_PROTOBUF));
 
-    let err = encoder
+    let bytes = encoder
         .encode_binary(&sample_event())
-        .expect_err("protobuf encoding is not implemented");
+        .expect("protobuf encoding should succeed");
 
-    match err {
-        AgUiError::Unsupported(message) => {
-            assert!(message.contains("protobuf encoding is not implemented"));
-        }
-        other => panic!("expected unsupported error, got {other:?}"),
-    }
+    assert!(encoder.accepts_protobuf());
+    // 4-byte big-endian length prefix followed by a body of exactly that length.
+    assert!(bytes.len() > 4);
+    let len = u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as usize;
+    assert_eq!(len, bytes.len() - 4);
 }
 
 #[test]
-fn encode_protobuf_returns_unsupported_error() {
-    let encoder = EventEncoder::new();
+fn encode_protobuf_round_trips_through_proto_decode() {
+    let encoder = EventEncoder::with_accept(Some(AGUI_MEDIA_TYPE_PROTOBUF));
+    let event = sample_event();
 
-    let err = encoder
-        .encode_protobuf(&sample_event())
-        .expect_err("protobuf encoding is not implemented");
-
-    match err {
-        AgUiError::Unsupported(message) => {
-            assert!(message.contains("protobuf encoding is not implemented"));
-        }
-        other => panic!("expected unsupported error, got {other:?}"),
-    }
+    let framed = encoder
+        .encode_protobuf(&event)
+        .expect("protobuf encoding should succeed");
+    // Strip the 4-byte length prefix before decoding the message body.
+    let body = &framed[4..];
+    let decoded = agui_rs_proto::decode(body).expect("decode should succeed");
+    assert_eq!(decoded, event);
 }
-
-// SKIPPED: should return protobuf encoded data when accept header includes protobuf media type: Rust encoder currently negotiates protobuf content type but returns AgUiError::Unsupported because protobuf encoding is not implemented in this build.
-// SKIPPED: should encode event as protobuf with length prefix: Rust encoder currently returns AgUiError::Unsupported from encode_protobuf instead of emitting length-prefixed protobuf bytes.

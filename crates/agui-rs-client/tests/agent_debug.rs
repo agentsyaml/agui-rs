@@ -46,6 +46,29 @@ fn debug_logger_preserves_prefix() {
     assert_eq!(logger.prefix(), "test-agent");
 }
 
-// SKIPPED: TypeScript AbstractAgent debug=true/false/object construction API does not exist in the Rust public client API.
-// SKIPPED: TypeScript lifecycle/event console.debug capture is not exposed by the Rust public client API.
-// SKIPPED: TypeScript runAgent debug error logging on agent execution is not configurable through the Rust public client API.
+#[test]
+fn forced_logger_is_enabled_regardless_of_env() {
+    let _guard = env_lock().lock().expect("env lock");
+    let original = std::env::var_os("AG_UI_DEBUG");
+    std::env::remove_var("AG_UI_DEBUG");
+
+    // `AgentConfig { debug: true }` wires a forced logger that ignores the env
+    // gate, mirroring TS `debug: true`.
+    let logger = DebugLogger::forced("LIFECYCLE");
+    assert!(logger.enabled());
+    assert_eq!(logger.prefix(), "LIFECYCLE");
+
+    if let Some(value) = original {
+        std::env::set_var("AG_UI_DEBUG", value);
+    }
+}
+
+// IMPLEMENTED: TS `debug: true` construction maps to `AgentConfig { debug: true }`,
+// which installs a forced (env-independent) lifecycle `DebugLogger` on the runner
+// — see `forced_logger_is_enabled_regardless_of_env` and the runner Run
+// started/finished lifecycle logs.
+// SKIPPED: TypeScript per-event console.debug capture (stream-stage [SSE]/[CHUNK]/
+// [VERIFY] prefixes) is a documented divergence — Rust pure stream fns take no
+// logger; only runner-level lifecycle logging is wired. See docs/typescript-alignment.md §4.
+// SKIPPED: asserting exact console.debug call counts relies on Vitest spy capture,
+// which has no Rust equivalent (logs go to stderr through DebugLogger).

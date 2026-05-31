@@ -238,4 +238,6 @@ async fn leaves_id_only_binary_and_mixed_parts_as_expected() {
     );
 }
 
-// SKIPPED: automatically transforms when maxVersion <= 0.0.47: Rust tests target the middleware submodule directly; there is no auto-insertion layer to exercise here.
+// IMPLEMENTED: max-version auto-insertion (`<= 0.0.47` upgrades binary content)
+// is now covered in tests/middleware_auto_insertion.rs via
+// AgentRunner::with_max_version.

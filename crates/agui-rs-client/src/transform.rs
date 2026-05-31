@@ -38,6 +38,42 @@ where
     })
 }
 
+/// Parses a length-prefixed protobuf byte stream into AG-UI events.
+///
+/// Each frame is a 4-byte big-endian `uint32` length header followed by a
+/// protobuf-encoded `Event` message of that length. Frames may be split across
+/// or batched within byte chunks; this reassembles them. Mirrors the canonical
+/// TypeScript `parseProtoStream`.
+pub fn parse_proto_stream<S, E>(stream: S) -> BoxStream<'static, Result<Event>>
+where
+    S: Stream<Item = std::result::Result<Bytes, E>> + Send + Unpin + 'static,
+    E: std::fmt::Display + Send + 'static,
+{
+    Box::pin(try_stream! {
+        let mut stream = stream;
+        let mut buffer: Vec<u8> = Vec::new();
+        while let Some(item) = stream.next().await {
+            let chunk = item.map_err(|error| AgUiError::transport(error.to_string(), true))?;
+            buffer.extend_from_slice(&chunk);
+
+            // Emit every complete frame currently buffered.
+            loop {
+                if buffer.len() < 4 {
+                    break;
+                }
+                let len = u32::from_be_bytes([buffer[0], buffer[1], buffer[2], buffer[3]]) as usize;
+                if buffer.len() < 4 + len {
+                    break;
+                }
+                let body = buffer[4..4 + len].to_vec();
+                buffer.drain(..4 + len);
+                let event = agui_rs_proto::decode(&body)?;
+                yield event;
+            }
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

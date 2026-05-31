@@ -9,9 +9,9 @@ use ::axum::{
     Router,
 };
 use agui_rs_core::RunAgentInput;
-use agui_rs_encoder::{EventEncoder, AGUI_MEDIA_TYPE_SSE};
+use agui_rs_encoder::{EventEncoder, AGUI_MEDIA_TYPE_PROTOBUF, AGUI_MEDIA_TYPE_SSE};
 
-use crate::{handler::RunHandler, sse::sse_body};
+use crate::{handler::RunHandler, sse::{proto_body, sse_body}};
 
 pub fn agui_router<H: RunHandler>(handler: H) -> Router {
     Router::new().route("/", agui_route(handler))
@@ -47,14 +47,6 @@ async fn run_agent<H: RunHandler>(
         .and_then(|value| value.to_str().ok());
     let encoder = EventEncoder::with_accept(accept);
 
-    if encoder.accepts_protobuf() {
-        return (
-            StatusCode::NOT_ACCEPTABLE,
-            "protobuf encoding is not implemented",
-        )
-            .into_response();
-    }
-
     let body = match to_bytes(request.into_body(), usize::MAX).await {
         Ok(body) => body,
         Err(error) => {
@@ -84,11 +76,17 @@ async fn run_agent<H: RunHandler>(
         }
     };
 
-    let mut response = Response::new(sse_body(stream, encoder));
+    let (content_type, body) = if encoder.accepts_protobuf() {
+        (AGUI_MEDIA_TYPE_PROTOBUF, proto_body(stream, encoder))
+    } else {
+        (AGUI_MEDIA_TYPE_SSE, sse_body(stream, encoder))
+    };
+
+    let mut response = Response::new(body);
     *response.status_mut() = StatusCode::OK;
     response.headers_mut().insert(
         header::CONTENT_TYPE,
-        HeaderValue::from_static(AGUI_MEDIA_TYPE_SSE),
+        HeaderValue::from_static(content_type),
     );
     response
         .headers_mut()
@@ -206,8 +204,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn returns_not_acceptable_for_protobuf_accept_header() {
-        let app = agui_router(StaticHandler { items: Vec::new() });
+    async fn returns_protobuf_response_for_protobuf_accept_header() {
+        let app = agui_router(StaticHandler {
+            items: vec![factory::run_started("thread-1", "run-1")],
+        });
 
         let response = app
             .oneshot(
@@ -220,10 +220,17 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(response.status(), StatusCode::NOT_ACCEPTABLE);
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers().get(header::CONTENT_TYPE).unwrap(),
+            "application/vnd.ag-ui.event+proto"
+        );
+
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        let text = String::from_utf8(body.to_vec()).unwrap();
-        assert_eq!(text, "protobuf encoding is not implemented");
+        // Length-prefixed protobuf: 4-byte big-endian header + body of that length.
+        assert!(body.len() > 4);
+        let len = u32::from_be_bytes([body[0], body[1], body[2], body[3]]) as usize;
+        assert_eq!(len, body.len() - 4);
     }
 
     #[tokio::test]

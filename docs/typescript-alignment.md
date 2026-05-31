@@ -4,6 +4,10 @@
 [`ag-ui-protocol/ag-ui`](https://github.com/ag-ui-protocol/ag-ui) monorepo,
 `sdks/typescript/packages/{core,client,encoder}`.
 
+> Per-file, per-case test reconciliation: see
+> [`test-reconciliation.md`](test-reconciliation.md) for the verifiable mapping
+> of all 568 TS cases to Rust ported/skipped coverage.
+
 | Tracked             | Value                                                         |
 | ------------------- | ------------------------------------------------------------- |
 | TS package versions | `@ag-ui/core` / `@ag-ui/client` / `@ag-ui/encoder` **0.0.54** |
@@ -43,28 +47,35 @@ kebab subtype, etc.).
 | TS                                                      | Rust                        | Status                                        |
 | ------------------------------------------------------- | --------------------------- | --------------------------------------------- |
 | SSE media type `text/event-stream`                      | `AGUI_MEDIA_TYPE_SSE`       | ✅                                             |
-| Protobuf media type `application/vnd.ag-ui.event+proto` | `AGUI_MEDIA_TYPE_PROTOBUF`  | ✅ constant; encode/decode `Unsupported`       |
+| Protobuf media type `application/vnd.ag-ui.event+proto` | `AGUI_MEDIA_TYPE_PROTOBUF`  | ✅ constant                                    |
 | `EventEncoder` content negotiation                      | `EventEncoder::with_accept` | ✅ behaviourally aligned                       |
-| protobuf encode/decode                                  | —                           | ⚠️ **gap**: stubbed (`AgUiError::Unsupported`) |
+| `EventEncoder.encodeProtobuf` (4-byte BE length prefix) | `EventEncoder::encode_protobuf` | ✅ aligned (2026-05-30)                     |
+| protobuf encode/decode                                  | `agui-rs-proto`             | ✅ aligned (2026-05-30); reasoning/activity/thinking rejected with `Unsupported` (not in `events.proto`) |
 
 ## 3. Client (`@ag-ui/client` → `agui-rs-client`)
 
 | TS construct                                                                     | Rust                                                       | Status                                                     |
 | -------------------------------------------------------------------------------- | ---------------------------------------------------------- | ---------------------------------------------------------- |
-| `transformChunks`                                                                | `chunks::expand_chunks`                                    | ✅                                                          |
+| `transformChunks`                                                                | `chunks::expand_chunks`                                    | ✅ single-mode state machine; CUSTOM/TOOL_CALL_RESULT close pending streams (2026-05-31) |
 | `verifyEvents`                                                                   | `verify::verify_events`                                    | ✅ aligned incl. multi-run streams (2026-05-30)             |
 | `defaultApplyEvents`                                                             | `apply::default_apply_events`                              | ✅                                                          |
-| `AgentSubscriber` hooks                                                          | `subscriber::AgentSubscriber`                              | ✅ behaviour; ⚠️ no `stopPropagation` mutation chaining      |
+| `AgentSubscriber` hooks (+ subscribe / multi-subscriber / temporary)             | `subscriber::AgentSubscriber` + `AgentRunner::{subscribe, run_agent_with}` | ✅ multi-subscriber + registration order (2026-05-30); ⚠️ no `stopPropagation` mutation chaining |
+| `AbstractAgent.addMessage/addMessages/setMessages/setState`                      | `AgentRunner::{add_message, add_messages, set_messages, set_state}`        | ✅ aligned (2026-05-30)                                     |
+| `AbstractAgent.clone()`                                                          | `AgentRunner::clone_runner`                                | ✅ aligned (2026-05-30)                                     |
+| `AbstractAgent.connect()` / `connectAgent()`                                     | `Agent::connect` + `AgentRunner::connect_agent`            | ✅ aligned (2026-05-30)                                     |
+| `getCapabilities()`                                                              | `Agent::capabilities` + `AgentRunner::capabilities`        | ✅ aligned (2026-05-30)                                     |
+| `maxVersion` + version-gated middleware auto-insertion                           | `AgentRunner::with_max_version`                            | ✅ aligned (2026-05-30)                                     |
 | `Middleware` / `FunctionMiddleware`                                              | `middleware::{Middleware, MiddlewareChain}`                | ✅                                                          |
-| `BackwardCompatibility_0_0_{39,45,47}`                                           | `middleware::backward_compat::*`                           | ✅ logic; ⚠️ no version-gated auto-insertion                 |
+| `BackwardCompatibility_0_0_{39,45,47}`                                           | `middleware::backward_compat::*`                           | ✅ logic + auto-insertion (2026-05-30)                      |
 | `FilterToolCallsMiddleware`                                                      | `middleware::filter_tool_calls`                            | ✅                                                          |
 | `HttpAgent` (SSE)                                                                | `http::HttpAgent`                                          | ✅                                                          |
 | `HttpAgentConfig.fetch` custom fetch                                             | `HttpAgentConfig::request_executor`                        | ✅ (Rust shape)                                             |
 | `interrupts` helpers (`getRunOutcome`, `isInterruptExpired`, `buildResumeArray`) | `interrupts::*`                                            | ✅                                                          |
-| **`AbstractAgent.pendingInterrupts` + resume enforcement**                       | `AgentRunner::pending_interrupts` + `ensure_resume_covers` | ✅ **newly aligned (2026-05-30)**                           |
+| **`AbstractAgent.pendingInterrupts` + resume enforcement**                       | `AgentRunner::pending_interrupts` + `ensure_resume_covers` | ✅ aligned (2026-05-30)                                     |
 | `convertToLegacyEvents`                                                          | `legacy::convert_legacy_events`                            | ✅                                                          |
-| `compactEvents`                                                                  | `compact::compact_events`                                  | ✅                                                          |
-| `DebugLogger`                                                                    | `debug_logger::DebugLogger`                                | ✅ type; ⚠️ not wired into transform/verify/chunks pipelines |
+| `compactEvents`                                                                  | `compact::compact_events`                                  | ✅ text/tool/state only — reasoning passes through, mirroring TS (2026-05-31)    |
+| `@ag-ui/proto` encode/decode                                                     | `agui-rs-proto` + `EventEncoder::encode_protobuf` + `parse_proto_stream` | ✅ aligned (2026-05-30); reasoning/activity/thinking not in proto schema |
+| `DebugLogger`                                                                    | `debug_logger::DebugLogger` + `AgentConfig::debug`         | ✅ lifecycle logging (2026-05-30); ⚠️ per-stream-stage logging not wired |
 
 ### Behavioural gap closed this round — `pendingInterrupts`
 
@@ -131,23 +142,25 @@ Ported from `core/src/__tests__/capabilities-interrupts.test.ts`
 
 ## 4. Intentional, documented divergences (Rust-idiomatic, non-protocol)
 
-These do not change wire behaviour and are tracked as `// SKIPPED:` markers in
-the corresponding test files:
+After closing the feature gaps, the only remaining divergences are genuinely
+architectural or JS-runtime-specific. None affect wire behaviour.
 
 | Area                                                       | Rationale                                                                 |
 | ---------------------------------------------------------- | ------------------------------------------------------------------------- |
 | `Observable`/RxJS → `futures::Stream`                      | Idiomatic async Rust; same event ordering.                                |
-| `clone()` of the agent                                     | `AgentRunner` owns `Arc<A>` + boxed clock; not `Clone`.                   |
-| `connect()` / `connectAgent()` / `events$`                 | Persistent-connection + replay-subject surface not yet implemented.       |
-| `getCapabilities()` / `maxVersion`                         | Not yet exposed on the runner.                                            |
-| Version-gated auto-insertion of backward-compat middleware | Rust exposes the middleware explicitly; no `maxVersion` field to gate on. |
-| `DebugLogger` integration into pipelines                   | Logger type exists; per-stage hooks not wired.                            |
-| Subscriber `stopPropagation` mutation chaining             | Rust subscriber hooks return `Result`, not mutation objects.              |
-| protobuf encode/decode                                     | Stubbed (`Unsupported`) pending a proto crate.                            |
+| Subscriber `stopPropagation` + `AgentStateMutation` model  | Rust subscriber hooks return `Result`/`Option<replacement>`, not mutation objects. Multi-subscriber registry, ordering, and replacement chaining are implemented; the JS mutation-object + `stopPropagation` contract is intentionally not adopted (would re-shape all 45 hooks with no wire impact). |
+| `events$` replay subject / `detachActiveRun`               | RxJS `ReplaySubject` and background-run detachment have no `futures::Stream` analogue; cancellation is covered by `AbortHandle`. |
+| Per-stream-stage `DebugLogger` logging (`[VERIFY]`/`[SSE]`/`[TRANSFORM]`/`[CHUNK]`) | Pure stream functions take no logger param; lifecycle logging is done at the runner (`AgentConfig::debug`). Stage logging would use `tracing` if needed. |
+| protobuf reasoning/activity/thinking events                | Not part of the canonical `events.proto` schema (18 variants); `encode` rejects them with `Unsupported`, matching upstream coverage. |
+| JS-runtime-only cases                                      | Frozen-input dev checks, `process` global, ESM interop — not modelled in Rust. |
 
 ## 5. Rust-only additions (supersets, do not affect TS parity)
 
-- `agui-rs-server` (axum `RunHandler` + `EventEmitter` + `serve`) — TS is client-only.
-- Structured `AgUiError::{Http, Transport}` with `is_retryable()` / `is_user_input()`.
+- `agui-rs-server` (axum `RunHandler` + `EventEmitter` + `serve`) — TS is
+  client-only. Supports both SSE (`sse_body`) and length-prefixed protobuf
+  (`proto_body`) responses via `Accept` content negotiation.
+- `agui-rs-proto` as a standalone crate (hand-written `prost` messages, no
+  `protoc` build dependency).
 - `AbortHandle` / `run_cancellable` cooperative cancellation.
+- Structured `AgUiError::{Http, Transport}` with `is_retryable()` / `is_user_input()`.
 - `agui-rs` facade crate with Cargo features.

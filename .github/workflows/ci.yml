@@ -91,6 +91,7 @@ jobs:
       - name: Publish dry-run (in dependency order)
         run: |
           cargo publish -p agui-rs-core    --dry-run
+          cargo publish -p agui-rs-proto   --dry-run
           cargo publish -p agui-rs-encoder --dry-run
           cargo publish -p agui-rs-client  --dry-run
           cargo publish -p agui-rs-server  --dry-run

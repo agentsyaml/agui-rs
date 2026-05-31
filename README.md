@@ -41,8 +41,9 @@ Change history: **[`CHANGELOG.md`](CHANGELOG.md)**.
 | `State` typing | `State = any` (untyped) | `State = Value` (untyped) | ✅ aligned |
 | Error model | `is_retryable()` / `is_user_input()` | structured `Http`/`Transport` + same classifiers | ✅ aligned |
 | Interrupt resume enforcement (`pendingInterrupts`) | enforced in `AbstractAgent` | `AgentRunner::pending_interrupts` + `ensure_resume_covers` | ✅ aligned |
-| Protobuf encode/decode | supported | surface only (`Unsupported`) | ⚠️ gap |
-| `getCapabilities()` / `clone()` / `connect()` / `events$` | present | not yet | ⚠️ gap |
+| Protobuf encode/decode | supported | `agui-rs-proto` (`prost`) + length-prefixed framing | ✅ aligned |
+| `getCapabilities()` / `clone()` / `connect()` | present | `capabilities()` / `clone_runner()` / `connect_agent()` | ✅ aligned |
+| `events$` replay subject | present | not modelled (RxJS-specific) | ⚠️ divergence |
 | Server side | (none — TS is client-only) | `agui-rs-server` (axum) | ➕ Rust extra |
 
 ### Design note — state stays untyped (TS-aligned)
@@ -62,7 +63,8 @@ helper** (e.g. a typed accessor on `RunAgentResult`) rather than threading a
 | Crate            | Purpose                                                                 |
 | ---------------- | ----------------------------------------------------------------------- |
 | `agui-rs-core`     | Protocol data types, all 33 event payloads, `Event` discriminated enum. |
-| `agui-rs-encoder`  | Wire-format encoder. SSE today; protobuf surface stubbed (`Unsupported`). |
+| `agui-rs-encoder`  | Wire-format encoder. SSE + protobuf (length-prefixed) negotiation. |
+| `agui-rs-proto`    | Protobuf binary encode/decode (`prost`, no `protoc` build dependency). |
 | `agui-rs-client`   | `Agent` trait, `HttpAgent`, runner, subscriber, chunk/verify/apply pipeline. |
 | `agui-rs-server`   | `RunHandler` trait, channel-based `EventEmitter`, `axum` route builder. |
 | `agui-rs`          | Facade crate re-exporting all others via Cargo features.               |
@@ -271,8 +273,10 @@ the user’s `RunHandler`, and frames the resulting event stream as SSE.
 - **State** via `STATE_SNAPSHOT` and `STATE_DELTA` (JSON Patch RFC 6902).
 - **Resume** with `ResumeEntry` for interrupt continuations.
 - **Content negotiation**: `text/event-stream` (default) and the protobuf
-  media type `application/vnd.ag-ui.event+proto` (surface only — encoding /
-  decoding returns `AgUiError::Unsupported` until a proto crate lands).
+  media type `application/vnd.ag-ui.event+proto` (encode via
+  `EventEncoder::encode_protobuf`, decode via `parse_proto_stream`, both using
+  the `agui-rs-proto` crate; reasoning/activity/thinking events are outside the
+  canonical proto schema).
 
 ---
 
@@ -311,6 +315,7 @@ and hitting it with `curl` (see *Quick start*).
 | ------------------------------------------ | ----------------------------------------------- |
 | `@ag-ui/core` (types, events)              | `agui-rs-core`                                    |
 | `@ag-ui/encoder`                           | `agui-rs-encoder`                                 |
+| `@ag-ui/proto`                             | `agui-rs-proto`                                   |
 | `@ag-ui/client` `AbstractAgent`            | `agui_rs_client::Agent` + `AgentRunner`           |
 | `HttpAgent`                                | `agui_rs_client::HttpAgent`                       |
 | `AgentSubscriber`                          | `agui_rs_client::AgentSubscriber`                 |
@@ -325,9 +330,7 @@ and hitting it with `curl` (see *Quick start*).
 
 ## Roadmap
 
-- Protobuf encoder/decoder (currently stubbed via `AgUiError::Unsupported`).
 - WebSocket transport.
-- Connect-style secondary client API.
 - crates.io publication.
 
 ---

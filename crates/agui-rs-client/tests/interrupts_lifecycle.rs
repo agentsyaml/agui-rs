@@ -5,10 +5,8 @@
 //! - a run that follows an interrupt outcome must address every open interrupt
 //!   via `resume`, or the run is rejected;
 //! - an expired pending interrupt rejects the run;
-//! - a successful outcome clears the pending set.
-//!
-//! TS clone()-specific cases remain out of scope (Rust `AgentRunner` is not
-//! `Clone`); they are noted at the bottom.
+//! - a successful outcome clears the pending set;
+//! - `clone_runner()` preserves the pending interrupt set (TS `clone()`).
 
 use std::sync::Mutex;
 
@@ -233,6 +231,33 @@ async fn rejects_run_when_pending_interrupt_is_expired() {
     assert!(error.to_string().to_lowercase().contains("expired"), "got: {error}");
 }
 
-// SKIPPED: TypeScript AbstractAgent.clone() pendingInterrupts preservation —
-// the Rust `AgentRunner` is not `Clone` (it owns an `Arc<A>` agent and a boxed
-// clock fn); interrupt-set preservation across clones has no Rust equivalent.
+// IMPLEMENTED: TypeScript AbstractAgent.clone() pendingInterrupts preservation —
+// the Rust `AgentRunner::clone_runner` deep-copies the pending interrupt set, so
+// a clone taken mid-interrupt enforces resume coverage exactly like its source.
+#[tokio::test]
+async fn clone_runner_preserves_pending_interrupts() {
+    let agent = ScriptedAgent::new(vec![interrupting_run(vec![
+        interrupt("int-1", None),
+        interrupt("int-2", None),
+    ])]);
+    let mut runner = AgentRunner::new(agent, AgentConfig::default());
+
+    runner
+        .run_agent(RunAgentParameters::default())
+        .await
+        .expect("first run should succeed");
+
+    let cloned = runner.clone_runner();
+    let original_ids: Vec<&str> = runner
+        .pending_interrupts()
+        .iter()
+        .map(|interrupt| interrupt.id.as_str())
+        .collect();
+    let cloned_ids: Vec<&str> = cloned
+        .pending_interrupts()
+        .iter()
+        .map(|interrupt| interrupt.id.as_str())
+        .collect();
+    assert_eq!(original_ids, vec!["int-1", "int-2"]);
+    assert_eq!(cloned_ids, original_ids);
+}

@@ -1,8 +1,7 @@
 use std::collections::HashMap;
 
 use agui_rs_core::{
-    BaseEventFields, Event, ReasoningMessageContentEvent, StateSnapshotEvent,
-    TextMessageContentEvent, ToolCallArgsEvent,
+    BaseEventFields, Event, StateSnapshotEvent, TextMessageContentEvent, ToolCallArgsEvent,
 };
 use serde_json::Value;
 
@@ -50,43 +49,18 @@ impl PendingToolCall {
     }
 }
 
-struct PendingReasoning {
-    reasoning_start: Option<Event>,
-    message_start: Option<Event>,
-    contents: Vec<ReasoningMessageContentEvent>,
-    message_end: Option<Event>,
-    reasoning_end: Option<Event>,
-    other_events: Vec<Event>,
-}
-
-impl PendingReasoning {
-    fn new() -> Self {
-        Self {
-            reasoning_start: None,
-            message_start: None,
-            contents: Vec::new(),
-            message_end: None,
-            reasoning_end: None,
-            other_events: Vec::new(),
-        }
-    }
-
-    fn is_open(&self) -> bool {
-        (self.reasoning_start.is_some() || self.message_start.is_some())
-            && self.reasoning_end.is_none()
-            && self.message_end.is_none()
-    }
-}
-
 /// Compacts streaming AG-UI event sequences.
+///
+/// Mirrors the canonical TypeScript `compactEvents`: only **text messages**,
+/// **tool calls**, and **state** are compacted. Reasoning, thinking, activity,
+/// and all other events pass through unchanged (buffered after an open
+/// text/tool sequence when they appear mid-stream).
 pub fn compact_events(events: Vec<Event>) -> Vec<Event> {
     let mut compacted = Vec::new();
     let mut pending_text_messages: HashMap<String, PendingTextMessage> = HashMap::new();
     let mut open_text_order = Vec::new();
     let mut pending_tool_calls: HashMap<String, PendingToolCall> = HashMap::new();
     let mut open_tool_order = Vec::new();
-    let mut pending_reasoning: HashMap<String, PendingReasoning> = HashMap::new();
-    let mut open_reasoning_order = Vec::new();
     // State compaction: collected within a run, flushed at RUN_STARTED
     // (pre-/inter-run), RUN_FINISHED / RUN_ERROR (in-run), and at end (trailing).
     let mut state_events: Vec<Event> = Vec::new();
@@ -154,45 +128,6 @@ pub fn compact_events(events: Vec<Event>) -> Vec<Event> {
                 flush_tool_call(&tool_call_id, &mut pending_tool_calls, &mut compacted);
                 remove_open_id(&mut open_tool_order, &tool_call_id);
             }
-            Event::ReasoningStart(start) => {
-                let message_id = start.message_id.clone();
-                let pending = pending_reasoning
-                    .entry(message_id.clone())
-                    .or_insert_with(PendingReasoning::new);
-                pending.reasoning_start = Some(Event::ReasoningStart(start));
-                push_open_id(&mut open_reasoning_order, &message_id);
-            }
-            Event::ReasoningMessageStart(start) => {
-                let message_id = start.message_id.clone();
-                let pending = pending_reasoning
-                    .entry(message_id.clone())
-                    .or_insert_with(PendingReasoning::new);
-                pending.message_start = Some(Event::ReasoningMessageStart(start));
-                push_open_id(&mut open_reasoning_order, &message_id);
-            }
-            Event::ReasoningMessageContent(content) => {
-                pending_reasoning
-                    .entry(content.message_id.clone())
-                    .or_insert_with(PendingReasoning::new)
-                    .contents
-                    .push(content);
-            }
-            Event::ReasoningMessageEnd(end) => {
-                let message_id = end.message_id.clone();
-                let pending = pending_reasoning
-                    .entry(message_id)
-                    .or_insert_with(PendingReasoning::new);
-                pending.message_end = Some(Event::ReasoningMessageEnd(end));
-            }
-            Event::ReasoningEnd(end) => {
-                let message_id = end.message_id.clone();
-                let pending = pending_reasoning
-                    .entry(message_id.clone())
-                    .or_insert_with(PendingReasoning::new);
-                pending.reasoning_end = Some(Event::ReasoningEnd(end));
-                flush_reasoning(&message_id, &mut pending_reasoning, &mut compacted);
-                remove_open_id(&mut open_reasoning_order, &message_id);
-            }
             other => {
                 if buffer_other_event(
                     &other,
@@ -200,8 +135,6 @@ pub fn compact_events(events: Vec<Event>) -> Vec<Event> {
                     &mut pending_text_messages,
                     &open_tool_order,
                     &mut pending_tool_calls,
-                    &open_reasoning_order,
-                    &mut pending_reasoning,
                 ) {
                     continue;
                 }
@@ -216,9 +149,6 @@ pub fn compact_events(events: Vec<Event>) -> Vec<Event> {
     for tool_call_id in pending_tool_calls.keys().cloned().collect::<Vec<_>>() {
         flush_tool_call(&tool_call_id, &mut pending_tool_calls, &mut compacted);
     }
-    for message_id in pending_reasoning.keys().cloned().collect::<Vec<_>>() {
-        flush_reasoning(&message_id, &mut pending_reasoning, &mut compacted);
-    }
 
     // Flush any remaining state events (incomplete run or events outside runs).
     flush_state(&mut state_events, &mut compacted);
@@ -232,8 +162,6 @@ fn buffer_other_event(
     pending_text_messages: &mut HashMap<String, PendingTextMessage>,
     open_tool_order: &[String],
     pending_tool_calls: &mut HashMap<String, PendingToolCall>,
-    open_reasoning_order: &[String],
-    pending_reasoning: &mut HashMap<String, PendingReasoning>,
 ) -> bool {
     for message_id in open_text_order {
         if let Some(pending) = pending_text_messages.get_mut(message_id) {
@@ -246,15 +174,6 @@ fn buffer_other_event(
 
     for tool_call_id in open_tool_order {
         if let Some(pending) = pending_tool_calls.get_mut(tool_call_id) {
-            if pending.is_open() {
-                pending.other_events.push(event.clone());
-                return true;
-            }
-        }
-    }
-
-    for message_id in open_reasoning_order {
-        if let Some(pending) = pending_reasoning.get_mut(message_id) {
             if pending.is_open() {
                 pending.other_events.push(event.clone());
                 return true;
@@ -355,48 +274,6 @@ fn flush_tool_call(
     }
 
     if let Some(end) = pending.end {
-        compacted.push(end);
-    }
-
-    compacted.extend(pending.other_events);
-}
-
-fn flush_reasoning(
-    message_id: &str,
-    pending_reasoning: &mut HashMap<String, PendingReasoning>,
-    compacted: &mut Vec<Event>,
-) {
-    let Some(pending) = pending_reasoning.remove(message_id) else {
-        return;
-    };
-
-    if let Some(start) = pending.reasoning_start {
-        compacted.push(start);
-    }
-
-    if let Some(start) = pending.message_start {
-        compacted.push(start);
-    }
-
-    if !pending.contents.is_empty() {
-        compacted.push(Event::ReasoningMessageContent(
-            ReasoningMessageContentEvent {
-                message_id: message_id.to_string(),
-                delta: pending
-                    .contents
-                    .into_iter()
-                    .map(|part| part.delta)
-                    .collect(),
-                base: BaseEventFields::default(),
-            },
-        ));
-    }
-
-    if let Some(end) = pending.message_end {
-        compacted.push(end);
-    }
-
-    if let Some(end) = pending.reasoning_end {
         compacted.push(end);
     }
 
@@ -537,52 +414,40 @@ mod tests {
         );
     }
 
+    // TS `compactEvents` does NOT compact reasoning events — they are not in the
+    // streaming set (only text / tool-call / state are). Reasoning content
+    // passes through unchanged, even across multiple content deltas.
     #[test]
-    fn compacts_reasoning_content() {
-        let result = compact_events(vec![
+    fn reasoning_events_pass_through_uncompacted() {
+        let events = vec![
             reasoning_start("r1"),
             reasoning_message_start("r1"),
             reasoning_content("r1", "step 1"),
             reasoning_content("r1", " + step 2"),
             reasoning_message_end("r1"),
             reasoning_end("r1"),
-        ]);
+        ];
 
-        assert_eq!(
-            result,
-            vec![
-                reasoning_start("r1"),
-                reasoning_message_start("r1"),
-                reasoning_content("r1", "step 1 + step 2"),
-                reasoning_message_end("r1"),
-                reasoning_end("r1"),
-            ]
-        );
+        // Identity: nothing is merged or reordered.
+        assert_eq!(compact_events(events.clone()), events);
     }
 
+    // Reasoning events do not open a streaming sequence, so an interleaved event
+    // is NOT buffered/reordered around them — it stays in place. (Contrast with
+    // text/tool sequences, which do reorder interleaved events.)
     #[test]
-    fn moves_interleaved_events_after_reasoning() {
+    fn interleaved_events_around_reasoning_keep_their_position() {
         let step = factory::step_started("plan");
-        let result = compact_events(vec![
+        let events = vec![
             reasoning_start("r1"),
             reasoning_message_start("r1"),
             step.clone(),
             reasoning_content("r1", "a"),
             reasoning_message_end("r1"),
             reasoning_end("r1"),
-        ]);
+        ];
 
-        assert_eq!(
-            result,
-            vec![
-                reasoning_start("r1"),
-                reasoning_message_start("r1"),
-                reasoning_content("r1", "a"),
-                reasoning_message_end("r1"),
-                reasoning_end("r1"),
-                step,
-            ]
-        );
+        assert_eq!(compact_events(events.clone()), events);
     }
 
     #[test]

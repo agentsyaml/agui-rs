@@ -19,9 +19,59 @@ are layered on top without diverging from that contract.
 | Monorepo commit | `f30021b9dddb97f827f463ab36bddd34ac6bb764` (2026-05-29) |
 | Reviewed | 2026-05-30 |
 
-## [Unreleased]
+## [0.1.1] - 2026-05-31
+
+### Fixed (faithfulness, 2026-05-31)
+- **`compact_events` no longer compacts reasoning.** The canonical TS
+  `compactEvents` only compacts text messages, tool calls, and state; reasoning
+  events are not in its streaming set and pass through unchanged. The Rust port
+  had added a reasoning-compaction path (concatenating
+  `REASONING_MESSAGE_CONTENT` deltas) that diverged from upstream — it has been
+  removed so reasoning events pass through verbatim, matching TS exactly. Also
+  simplifies the module (drops the `PendingReasoning` accumulator + its flush).
+- **`expand_chunks` close-set corrected.** TS `transformChunks` closes a pending
+  chunk stream before `TOOL_CALL_RESULT` and `CUSTOM` (only `RAW`,
+  `ACTIVITY_SNAPSHOT`, `ACTIVITY_DELTA`, `REASONING_ENCRYPTED_VALUE` pass through
+  without closing). The Rust port wrongly treated `CUSTOM` and `TOOL_CALL_RESULT`
+  as non-closing. Fixed, with regression tests
+  (`custom_event_closes_pending_text_message`,
+  `tool_call_result_closes_pending_text_message`). Also removed a spurious
+  close-on-empty-chunk branch that had no TS counterpart.
+
+### Changed (elegance, 2026-05-31)
+- `expand_chunks` rewritten around a single `OpenChunk` enum
+  (`Text` / `Tool` / `Reasoning`), mirroring the TS single-`mode` state machine,
+  replacing three parallel `Option`s and the duplicated "close the other two"
+  logic in every handler. At most one chunk stream is open at a time, as in TS.
 
 ### Added
+- **`agui-rs-proto` crate**: full protobuf binary encoding/decoding for the 18
+  events in the canonical `events.proto` schema, using hand-written `prost`
+  messages (no `protoc` build dependency). Wired into
+  `EventEncoder::encode_protobuf` (4-byte big-endian length-prefixed framing)
+  and `agui_rs_client::parse_proto_stream` (length-prefixed frame reassembly +
+  decode). Exposed on the facade crate behind the `proto` feature.
+- `Agent::connect` / `Agent::connect_cancellable` + `AgentRunner::connect_agent`
+  / `connect_agent_with` — connect-style runs, with `ConnectNotImplemented`
+  swallowed into an empty result (mirrors TS `connectAgent`).
+- `Agent::capabilities` + `AgentRunner::capabilities` — optional declared
+  `AgentCapabilities` (mirrors TS `getCapabilities?()`).
+- `AgentRunner::clone_runner` — deep-copies messages/state/pending interrupts,
+  shares the agent/middleware/subscribers (mirrors TS `clone()`).
+- `AgentRunner::with_max_version` + `AgentConfig::debug` — version-gated
+  auto-insertion of backward-compat middleware (mirrors the TS `AbstractAgent`
+  constructor) and runner-level lifecycle debug logging via `DebugLogger`
+  (`forced` constructor for explicit opt-in).
+- Multi-subscriber support on `AgentRunner`: `subscribe()` (returns a
+  `Subscription` with `unsubscribe()`), `subscriber_count()`, and a one-shot
+  per-run subscriber via `run_agent_with(params, subscriber)`. Subscribers are
+  invoked in registration order; replacements from `on_new_message` /
+  `on_new_tool_call` chain through subscribers. Mirrors TS
+  `AbstractAgent.subscribe` + `runAgent(params, subscriber)`.
+- Agent mutator API: `AgentRunner::{add_message, add_messages, set_messages,
+  set_state}` plus `messages()` / `state()` / `thread_id()` accessors, with
+  subscriber notifications (`on_new_message`, `on_new_tool_call`,
+  `on_messages_changed`, `on_state_changed`). Mirrors TS `AbstractAgent`.
 - `AgentRunner::pending_interrupts()` and `with_now_fn()` — the stateful runner
   now tracks unresolved interrupts emitted by a `RUN_FINISHED` interrupt
   outcome, matching TypeScript `AbstractAgent.pendingInterrupts`.
@@ -30,6 +80,14 @@ are layered on top without diverging from that contract.
   `isInterruptExpired`.
 - `docs/typescript-alignment.md`: full field-by-field alignment audit against
   TypeScript SDK `0.0.54`.
+- **Server protobuf responses**: `agui-rs-server` now content-negotiates
+  protobuf. When a request's `Accept` header selects
+  `application/vnd.ag-ui.event+proto`, the route streams length-prefixed
+  protobuf frames via the new `proto_body` helper instead of returning
+  `406 Not Acceptable`. SSE remains the default.
+- Public re-exports aligning the client crate's middleware surface with the TS
+  `@ag-ui/client` middleware exports: `FilterToolCallsMiddleware`,
+  `FilterToolCallsConfig`, and `BackwardCompat0_0_{39,45,47}`.
 
 ### Changed
 - Aligned the SDK against the TypeScript SDK `0.0.54` (commit `f30021b9`), now
@@ -60,11 +118,26 @@ are layered on top without diverging from that contract.
   `RUN_STARTED` (pre-/inter-run), `RUN_FINISHED` / `RUN_ERROR`, and end —
   matching canonical `compact.ts`.
 
+### Changed (cleanup round, 2026-05-31)
+- Removed all dead code masked by `#[allow(dead_code)]`: the
+  `FilterToolCallsMiddleware::should_filter_tool`/`should_filter_tool_name`
+  helpers (the `Middleware::run` impl filters inline) were deleted, and the
+  `#[allow(dead_code)]` annotations on the `filter_tool_calls` and
+  `backward_compat` modules were removed — both modules are now reachable
+  through public re-exports (TS-aligned) and `with_max_version`. No source file
+  carries any `#[allow(...)]` attribute.
+- Refreshed stale `// SKIPPED:` markers that no longer reflect implemented
+  behaviour: `interrupts_lifecycle.rs` (clone interrupt preservation is now a
+  real test via `clone_runner`), `transform_http.rs` (protobuf transform is
+  implemented, not `Unsupported`), and `agent_debug.rs` (`AgentConfig::debug`
+  forced-logger construction is now a real test).
+- `docs/typescript-alignment.md` §2/§5 corrected: protobuf encode/decode is no
+  longer described as a stubbed gap.
+
 ### Added (docs/tooling)
 - `docs/test-reconciliation.md`: per-file, per-case TS⇄Rust reconciliation with
-  classification of every file where Rust coverage is below the TS case count.
-- `scripts/reconcile.ps1` + `scripts/titles.ps1`: reproducible tooling that
-  enumerates TS cases and maps them to Rust ported/skipped counts.
+  classification of every file where Rust coverage is below the TS case count,
+  plus a reproducible (ripgrep-based) counting method.
 
 ### Notes
 - `agui-rs-core` / `agui-rs-client` remain free of any date dependency; interrupt
@@ -75,12 +148,22 @@ are layered on top without diverging from that contract.
   `verify/__tests__/verify.lifecycle.test.ts` (2),
   `agent/__tests__/interrupts-lifecycle.test.ts` (6),
   `core/__tests__/capabilities-interrupts.test.ts` (rewritten for canonical shape),
-  `compact/__tests__/compact.test.ts` "State Compaction" (13).
-- Full per-file test reconciliation recorded in `docs/test-reconciliation.md`
-  (568 TS cases in scope; 484 ported, 76 explicit `SKIPPED` markers; every
-  below-coverage file classified).
+  `compact/__tests__/compact.test.ts` "State Compaction" (13),
+  `agent/__tests__/subscriber.test.ts` registry/temporary cases (6, in
+  `tests/subscriber_registry.rs`),
+  `agent/__tests__/agent-mutations.test.ts` (9, in `tests/agent_mutators.rs`),
+  `agent/__tests__/agent-clone.test.ts` + connect/capabilities (8, in
+  `tests/agent_lifecycle.rs`),
+  `middleware/__tests__/backward-compatibility-*` auto-insertion (5, in
+  `tests/middleware_auto_insertion.rs`),
+  `transform/__tests__/proto.test.ts` (6, in `tests/transform_proto.rs`) +
+  `agui-rs-proto` round-trips (9).
+- Remaining divergences are architectural / JS-runtime-only (subscriber
+  `stopPropagation` mutation-object model, `events$`/`detachActiveRun`,
+  per-stream-stage debug logging, frozen-input/ESM cases). See
+  `docs/typescript-alignment.md` §4.
 - Verified: `cargo build --workspace --examples`, `cargo clippy --workspace
-  --all-targets` (zero warnings), `cargo test --workspace` (1223 tests passing).
+  --all-targets` (zero warnings), `cargo test --workspace` (1308 tests passing).
 
 ## [0.1.0] - 2026-05-29
 

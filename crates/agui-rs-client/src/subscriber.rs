@@ -409,6 +409,147 @@ pub trait AgentSubscriber: Send + Sync {
     }
 }
 
+/// Fans an `AgentSubscriber` call out to an ordered list of subscribers.
+///
+/// Mirrors the TypeScript `AbstractAgent` behaviour of holding multiple
+/// subscribers and invoking each in registration order:
+/// - `()`-returning hooks call every subscriber; the first error short-circuits.
+/// - `on_new_message` / `on_new_tool_call` chain replacements: each subscriber
+///   sees the previous subscriber's replacement, and the final replacement (if
+///   any) is returned. This matches TS mutation chaining for message/tool-call
+///   rewriting.
+pub(crate) struct CompositeSubscriber {
+    subscribers: Vec<std::sync::Arc<dyn AgentSubscriber>>,
+}
+
+impl CompositeSubscriber {
+    pub(crate) fn new(subscribers: Vec<std::sync::Arc<dyn AgentSubscriber>>) -> Self {
+        Self { subscribers }
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.subscribers.is_empty()
+    }
+}
+
+macro_rules! impl_composite_subscriber {
+    (
+        unit: [ $( $uname:ident ( $($uarg:ident : $uty:ty),* ) ),* $(,)? ],
+        try: [ $( $tname:ident ( $tctx:ty ) ),* $(,)? ],
+    ) => {
+        #[async_trait]
+        impl AgentSubscriber for CompositeSubscriber {
+            $(
+                async fn $uname(&self, $($uarg: $uty),*) {
+                    for subscriber in &self.subscribers {
+                        subscriber.$uname($($uarg),*).await;
+                    }
+                }
+            )*
+            $(
+                async fn $tname(&self, ctx: &$tctx) -> std::result::Result<(), AgUiError> {
+                    for subscriber in &self.subscribers {
+                        subscriber.$tname(ctx).await?;
+                    }
+                    std::result::Result::Ok(())
+                }
+            )*
+
+            async fn on_new_message(
+                &self,
+                ctx: &NewMessageContext<'_>,
+            ) -> std::result::Result<Option<Message>, AgUiError> {
+                // Chain replacements: each subscriber sees the latest message.
+                let mut replacement: Option<Message> = None;
+                for subscriber in &self.subscribers {
+                    let current = replacement.as_ref().unwrap_or(ctx.message);
+                    let next_ctx = NewMessageContext {
+                        run: ctx.run,
+                        message: current,
+                    };
+                    if let Some(new_message) = subscriber.on_new_message(&next_ctx).await? {
+                        replacement = Some(new_message);
+                    }
+                }
+                std::result::Result::Ok(replacement)
+            }
+
+            async fn on_new_tool_call(
+                &self,
+                ctx: &NewToolCallContext<'_>,
+            ) -> std::result::Result<Option<ToolCall>, AgUiError> {
+                let mut replacement: Option<ToolCall> = None;
+                for subscriber in &self.subscribers {
+                    let current = replacement.as_ref().unwrap_or(ctx.tool_call);
+                    let next_ctx = NewToolCallContext {
+                        run: ctx.run,
+                        tool_call: current,
+                    };
+                    if let Some(new_tool_call) = subscriber.on_new_tool_call(&next_ctx).await? {
+                        replacement = Some(new_tool_call);
+                    }
+                }
+                std::result::Result::Ok(replacement)
+            }
+        }
+    };
+}
+
+impl_composite_subscriber! {
+    unit: [
+        on_run_initialized(ctx: &RunContext),
+        on_run_finalized(ctx: &RunContext),
+        on_messages_changed(ctx: &RunContext, messages: &[Message]),
+        on_state_changed(ctx: &RunContext, state: &State),
+        on_run_started(ctx: &RunContext),
+        on_run_finished(ctx: &RunContext),
+        on_run_failed(ctx: &RunContext, err: &AgUiError),
+        on_event(ctx: &RunContext, event: &Event),
+        on_text_message_start(ctx: &RunContext, message_id: &str),
+        on_text_message_content(ctx: &RunContext, message_id: &str, delta: &str),
+        on_text_message_end(ctx: &RunContext, message_id: &str),
+        on_tool_call_start(ctx: &RunContext, tool_call_id: &str, tool_call_name: &str),
+        on_tool_call_args(ctx: &RunContext, tool_call_id: &str, delta: &str),
+        on_tool_call_end(ctx: &RunContext, tool_call_id: &str),
+        on_tool_call_result(ctx: &RunContext, tool_call_id: &str, content: &str),
+    ],
+    try: [
+        on_run_started_event(EventContext<'_, RunStartedEvent>),
+        on_run_finished_event(RunFinishedContext<'_>),
+        on_run_error(EventContext<'_, RunErrorEvent>),
+        on_run_failed_event(RunFailedContext<'_>),
+        on_step_started(EventContext<'_, StepStartedEvent>),
+        on_step_finished(EventContext<'_, StepFinishedEvent>),
+        on_text_message_start_event(EventContext<'_, TextMessageStartEvent>),
+        on_text_message_content_event(TextContentContext<'_>),
+        on_text_message_end_event(TextEndContext<'_>),
+        on_text_message_chunk(EventContext<'_, TextMessageChunkEvent>),
+        on_tool_call_start_event(EventContext<'_, ToolCallStartEvent>),
+        on_tool_call_args_event(ToolCallArgsContext<'_>),
+        on_tool_call_end_event(ToolCallEndContext<'_>),
+        on_tool_call_chunk(EventContext<'_, ToolCallChunkEvent>),
+        on_tool_call_result_event(ToolCallResultContext<'_>),
+        on_reasoning_started(EventContext<'_, ReasoningStartEvent>),
+        on_reasoning_start(EventContext<'_, ReasoningMessageStartEvent>),
+        on_reasoning_content(ReasoningContentContext<'_>),
+        on_reasoning_end(ReasoningEndContext<'_>),
+        on_reasoning_chunk(EventContext<'_, ReasoningMessageChunkEvent>),
+        on_reasoning_finished(EventContext<'_, ReasoningEndEvent>),
+        on_reasoning_encrypted_value(EventContext<'_, ReasoningEncryptedValueEvent>),
+        on_thinking_start(EventContext<'_, ThinkingStartEvent>),
+        on_thinking_end(EventContext<'_, ThinkingEndEvent>),
+        on_state_snapshot(EventContext<'_, StateSnapshotEvent>),
+        on_state_delta(EventContext<'_, StateDeltaEvent>),
+        on_messages_snapshot(EventContext<'_, MessagesSnapshotEvent>),
+        on_activity_snapshot(ActivitySnapshotContext<'_>),
+        on_activity_delta(ActivityDeltaContext<'_>),
+        on_raw_event(EventContext<'_, RawEvent>),
+        on_custom_event(EventContext<'_, CustomEvent>),
+        on_interrupt(InterruptContext<'_>),
+        on_event_received(EventContext<'_, Event>),
+    ],
+}
+
 #[cfg(test)]
 mod subscriber_tests {
     use super::*;

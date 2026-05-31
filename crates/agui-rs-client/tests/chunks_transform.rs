@@ -761,3 +761,71 @@ async fn raw_event_does_not_close_pending_text_message() {
         ]
     );
 }
+
+// Faithfulness regression: in TS `transformChunks`, CUSTOM and TOOL_CALL_RESULT
+// belong to the group that closes a pending chunk stream first (only RAW,
+// ACTIVITY_SNAPSHOT, ACTIVITY_DELTA and REASONING_ENCRYPTED_VALUE pass through
+// without closing). These two tests lock that behaviour in.
+#[tokio::test]
+async fn custom_event_closes_pending_text_message() {
+    let custom_event = Event::Custom(agui_rs_core::CustomEvent {
+        name: "mark".into(),
+        value: json!({ "x": 1 }),
+        base: BaseEventFields::default(),
+    });
+    let events = collect_ok(vec![
+        create_text_message_chunk_event(
+            Some("msg-123".into()),
+            None,
+            Some("Hello".into()),
+            None,
+            Some(1),
+            None,
+        ),
+        custom_event.clone(),
+    ])
+    .await;
+
+    assert_eq!(
+        events,
+        vec![
+            text_start("msg-123", TextMessageRole::Assistant, None),
+            text_content("msg-123", "Hello"),
+            text_end("msg-123"),
+            custom_event,
+        ]
+    );
+}
+
+#[tokio::test]
+async fn tool_call_result_closes_pending_text_message() {
+    let result_event = Event::ToolCallResult(agui_rs_core::ToolCallResultEvent {
+        message_id: "tool-msg-1".into(),
+        tool_call_id: "tc-1".into(),
+        content: "done".into(),
+        role: None,
+        base: BaseEventFields::default(),
+    });
+    let events = collect_ok(vec![
+        create_text_message_chunk_event(
+            Some("msg-123".into()),
+            None,
+            Some("Hello".into()),
+            None,
+            Some(1),
+            None,
+        ),
+        result_event.clone(),
+    ])
+    .await;
+
+    assert_eq!(
+        events,
+        vec![
+            text_start("msg-123", TextMessageRole::Assistant, None),
+            text_content("msg-123", "Hello"),
+            text_end("msg-123"),
+            result_event,
+        ]
+    );
+}

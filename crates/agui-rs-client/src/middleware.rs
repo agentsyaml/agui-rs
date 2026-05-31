@@ -93,6 +93,13 @@ impl MiddlewareChain {
         self.middlewares.push(middleware);
     }
 
+    /// Appends all middlewares from `other` to the end of this chain,
+    /// preserving order. Used to compose auto-inserted middleware with
+    /// user-provided middleware.
+    pub fn extend(&mut self, other: MiddlewareChain) {
+        self.middlewares.extend(other.middlewares);
+    }
+
     pub async fn run(
         &self,
         input: MiddlewareInput,
@@ -112,9 +119,14 @@ impl MiddlewareChain {
     pub fn is_empty(&self) -> bool {
         self.middlewares.is_empty()
     }
+
+    /// Number of middlewares in the chain.
+    pub fn len(&self) -> usize {
+        self.middlewares.len()
+    }
 }
 
-#[allow(dead_code)]
+/// `filterToolCalls` middleware port: filters tool calls by allow/deny lists.
 pub mod filter_tool_calls {
     use super::*;
 
@@ -179,18 +191,6 @@ pub mod filter_tool_calls {
                     .map(|tools| tools.into_iter().collect()),
             }
         }
-
-        fn should_filter_tool(&self, tool_name: &str) -> bool {
-            if let Some(allowed_tools) = &self.allowed_tools {
-                return !allowed_tools.contains(tool_name);
-            }
-
-            if let Some(disallowed_tools) = &self.disallowed_tools {
-                return disallowed_tools.contains(tool_name);
-            }
-
-            false
-        }
     }
 
     #[async_trait]
@@ -251,15 +251,11 @@ pub mod filter_tool_calls {
             Ok(Box::pin(output))
         }
     }
-
-    impl FilterToolCallsMiddleware {
-        pub fn should_filter_tool_name(&self, tool_name: &str) -> bool {
-            self.should_filter_tool(tool_name)
-        }
-    }
 }
 
-#[allow(dead_code)]
+/// Backward-compatibility middlewares mirroring the TS
+/// `BackwardCompatibility_0_0_*` exports. Auto-inserted by
+/// [`AgentRunner::with_max_version`](crate::AgentRunner::with_max_version).
 pub mod backward_compat {
     use super::*;
 

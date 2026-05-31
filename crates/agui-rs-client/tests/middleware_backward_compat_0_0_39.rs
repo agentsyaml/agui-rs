@@ -103,4 +103,6 @@ async fn strips_parent_run_id_and_flattens_user_content_for_legacy_compatibility
     }
 }
 
-// SKIPPED: automatically strips parentRunId when maxVersion <= 0.0.39: Rust tests target the middleware submodule directly; there is no auto-insertion layer to exercise here.
+// IMPLEMENTED: max-version auto-insertion (`<= 0.0.39` strips parentRunId) is
+// now covered in tests/middleware_auto_insertion.rs via
+// AgentRunner::with_max_version.

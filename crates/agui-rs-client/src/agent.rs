@@ -3,10 +3,10 @@ use crate::chunks::expand_chunks;
 use crate::interrupts::ensure_resume_covers;
 use crate::middleware::{MiddlewareChain, MiddlewareInput};
 use crate::subscriber::{
-    ActivityDeltaContext, ActivitySnapshotContext, AgentSubscriber, EventContext, InterruptContext,
-    NewMessageContext, NewToolCallContext, ReasoningContentContext, ReasoningEndContext,
-    RunContext, RunFinishedContext, TextContentContext, TextEndContext, ToolCallArgsContext,
-    ToolCallEndContext, ToolCallResultContext,
+    ActivityDeltaContext, ActivitySnapshotContext, AgentSubscriber, CompositeSubscriber,
+    EventContext, InterruptContext, NewMessageContext, NewToolCallContext, ReasoningContentContext,
+    ReasoningEndContext, RunContext, RunFinishedContext, TextContentContext, TextEndContext,
+    ToolCallArgsContext, ToolCallEndContext, ToolCallResultContext,
 };
 use crate::verify::verify_events;
 use agui_rs_core::{
@@ -103,6 +103,36 @@ pub trait Agent: Send + Sync {
 
         Ok(abortable_event_stream(self.run(input).await?, abort))
     }
+
+    /// Establishes a persistent connection and returns an event stream.
+    ///
+    /// Override to support connect-style agents. The default mirrors the
+    /// TypeScript `AbstractAgent.connect`, which throws
+    /// `AGUIConnectNotImplementedError`.
+    async fn connect(&self, _input: RunAgentInput) -> Result<EventStream> {
+        Err(AgUiError::ConnectNotImplemented)
+    }
+
+    /// Cancellable variant of [`Agent::connect`].
+    async fn connect_cancellable(
+        &self,
+        input: RunAgentInput,
+        abort: AbortHandle,
+    ) -> Result<EventStream> {
+        if abort.is_aborted() {
+            return Err(AgUiError::Cancelled);
+        }
+
+        Ok(abortable_event_stream(self.connect(input).await?, abort))
+    }
+
+    /// Returns the agent's declared capabilities, if any.
+    ///
+    /// Mirrors the optional TypeScript `AbstractAgent.getCapabilities?()`.
+    /// The default returns `None` ("not declared").
+    async fn capabilities(&self) -> Option<agui_rs_core::AgentCapabilities> {
+        None
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -112,6 +142,10 @@ pub struct AgentConfig {
     pub thread_id: Option<String>,
     pub initial_messages: Vec<Message>,
     pub initial_state: State,
+    /// Enables lifecycle debug logging through [`DebugLogger`] for the runner.
+    /// Mirrors the TS `AgentConfig.debug`. (Per-stream-stage debug logging is a
+    /// documented divergence — see docs/typescript-alignment.md.)
+    pub debug: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -132,15 +166,39 @@ pub struct RunAgentResult {
     pub outcome: Option<RunFinishedOutcome>,
 }
 
+type SubscriberList = Vec<Arc<dyn AgentSubscriber>>;
+type SubscriberRegistry = Arc<std::sync::Mutex<SubscriberList>>;
+
 pub struct AgentRunner<A: Agent + 'static> {
     agent: Arc<A>,
     middleware: MiddlewareChain,
-    subscriber: Option<Arc<dyn AgentSubscriber>>,
+    subscribers: SubscriberRegistry,
     messages: Vec<Message>,
     state: State,
     thread_id: String,
     pending_interrupts: Vec<Interrupt>,
     now_fn: Arc<dyn Fn() -> String + Send + Sync>,
+    debug_logger: Option<crate::debug_logger::DebugLogger>,
+}
+
+/// Handle returned by [`AgentRunner::subscribe`].
+///
+/// Call [`Subscription::unsubscribe`] to remove the registered subscriber,
+/// mirroring the object returned by the TypeScript `AbstractAgent.subscribe`.
+pub struct Subscription {
+    registry: std::sync::Weak<std::sync::Mutex<SubscriberList>>,
+    subscriber: Arc<dyn AgentSubscriber>,
+}
+
+impl Subscription {
+    /// Removes the associated subscriber from the runner it was registered on.
+    pub fn unsubscribe(self) {
+        if let Some(registry) = self.registry.upgrade() {
+            if let Ok(mut subscribers) = registry.lock() {
+                subscribers.retain(|existing| !Arc::ptr_eq(existing, &self.subscriber));
+            }
+        }
+    }
 }
 
 /// Default "now" provider used for interrupt-expiry checks.
@@ -159,25 +217,108 @@ impl<A: Agent + 'static> AgentRunner<A> {
             .thread_id
             .clone()
             .unwrap_or_else(|| generate_id("thread"));
+        let debug_logger = config
+            .debug
+            .then(|| crate::debug_logger::DebugLogger::forced("LIFECYCLE"));
         Self {
             agent: Arc::new(agent),
             middleware: MiddlewareChain::new(),
             messages: config.initial_messages.clone(),
             state: config.initial_state.clone(),
             thread_id,
-            subscriber: None,
+            subscribers: Arc::new(std::sync::Mutex::new(Vec::new())),
             pending_interrupts: Vec::new(),
             now_fn: Arc::new(default_now),
+            debug_logger,
         }
     }
 
-    pub fn with_subscriber(mut self, sub: Arc<dyn AgentSubscriber>) -> Self {
-        self.subscriber = Some(sub);
+    /// Registers a permanent subscriber (builder style). Equivalent to
+    /// [`AgentRunner::subscribe`] but returns `self` for chaining.
+    pub fn with_subscriber(self, sub: Arc<dyn AgentSubscriber>) -> Self {
+        if let Ok(mut subscribers) = self.subscribers.lock() {
+            subscribers.push(sub);
+        }
         self
+    }
+
+    /// Registers a permanent subscriber, returning a [`Subscription`] whose
+    /// [`Subscription::unsubscribe`] removes it. Mirrors TS `agent.subscribe`.
+    pub fn subscribe(&self, sub: Arc<dyn AgentSubscriber>) -> Subscription {
+        if let Ok(mut subscribers) = self.subscribers.lock() {
+            subscribers.push(sub.clone());
+        }
+        Subscription {
+            registry: Arc::downgrade(&self.subscribers),
+            subscriber: sub,
+        }
+    }
+
+    /// Returns the number of currently registered permanent subscribers.
+    pub fn subscriber_count(&self) -> usize {
+        self.subscribers
+            .lock()
+            .map(|subscribers| subscribers.len())
+            .unwrap_or(0)
+    }
+
+    /// Creates a deep copy of the runner: messages, state, and pending
+    /// interrupts are cloned; the underlying agent (`Arc<A>`), middleware chain,
+    /// and registered subscribers are shared by clone (a fresh registry holding
+    /// the same subscriber `Arc`s). Mirrors TS `AbstractAgent.clone`.
+    pub fn clone_runner(&self) -> Self {
+        let subscribers = self
+            .subscribers
+            .lock()
+            .map(|subscribers| subscribers.clone())
+            .unwrap_or_default();
+        Self {
+            agent: self.agent.clone(),
+            middleware: self.middleware.clone(),
+            subscribers: Arc::new(std::sync::Mutex::new(subscribers)),
+            messages: self.messages.clone(),
+            state: self.state.clone(),
+            thread_id: self.thread_id.clone(),
+            pending_interrupts: self.pending_interrupts.clone(),
+            now_fn: self.now_fn.clone(),
+            debug_logger: self.debug_logger.clone(),
+        }
     }
 
     pub fn with_middleware(mut self, chain: MiddlewareChain) -> Self {
         self.middleware = chain;
+        self
+    }
+
+    /// Returns the runner's middleware chain (useful for asserting
+    /// auto-inserted backward-compat middleware).
+    pub fn middleware_chain(&self) -> &MiddlewareChain {
+        &self.middleware
+    }
+
+    /// Auto-inserts backward-compatibility middleware based on a declared
+    /// `max_version`, mirroring the TypeScript `AbstractAgent` constructor:
+    /// - `<= 0.0.39`: strips `parentRunId` and concatenates legacy multipart text
+    /// - `<= 0.0.45`: rewrites legacy `THINKING_*` events to `REASONING_*`
+    /// - `<= 0.0.47`: upgrades legacy binary input content to typed parts
+    ///
+    /// Middlewares are prepended (run before user middleware), as in TS.
+    pub fn with_max_version(mut self, max_version: &str) -> Self {
+        use crate::middleware::backward_compat::{
+            BackwardCompat0_0_39, BackwardCompat0_0_45, BackwardCompat0_0_47,
+        };
+        let mut prepended = MiddlewareChain::new();
+        if version_lte(max_version, "0.0.39") {
+            prepended.push(BackwardCompat0_0_39);
+        }
+        if version_lte(max_version, "0.0.45") {
+            prepended.push(BackwardCompat0_0_45);
+        }
+        if version_lte(max_version, "0.0.47") {
+            prepended.push(BackwardCompat0_0_47);
+        }
+        prepended.extend(std::mem::take(&mut self.middleware));
+        self.middleware = prepended;
         self
     }
 
@@ -200,8 +341,145 @@ impl<A: Agent + 'static> AgentRunner<A> {
         &self.pending_interrupts
     }
 
+    /// The current conversation messages held by the runner.
+    pub fn messages(&self) -> &[Message] {
+        &self.messages
+    }
+
+    /// The current agent state held by the runner.
+    pub fn state(&self) -> &State {
+        &self.state
+    }
+
+    /// The conversation thread id.
+    pub fn thread_id(&self) -> &str {
+        &self.thread_id
+    }
+
+    /// Builds a run-less [`RunContext`] for out-of-run subscriber notifications
+    /// (mutator methods). Mirrors TS, which passes the agent without a
+    /// run-scoped input for `addMessage`/`setState`/etc.
+    fn mutation_context(&self) -> RunContext {
+        RunContext {
+            run_id: String::new(),
+            thread_id: self.thread_id.clone(),
+            messages: self.messages.clone(),
+            state: self.state.clone(),
+        }
+    }
+
+    async fn notify_new_message(&self, message: &Message) {
+        let subscribers = self
+            .subscribers
+            .lock()
+            .map(|subscribers| subscribers.clone())
+            .unwrap_or_default();
+        if subscribers.is_empty() {
+            return;
+        }
+        let composite = CompositeSubscriber::new(subscribers);
+        let context = self.mutation_context();
+        // Best-effort out-of-run notifications: replacements/errors from these
+        // hooks are not applied (TS fires them as fire-and-forget side effects).
+        let _ = composite
+            .on_new_message(&NewMessageContext {
+                run: &context,
+                message,
+            })
+            .await;
+        if let Message::Assistant(assistant) = message {
+            if let Some(tool_calls) = &assistant.tool_calls {
+                for tool_call in tool_calls {
+                    let _ = composite
+                        .on_new_tool_call(&NewToolCallContext {
+                            run: &context,
+                            tool_call,
+                        })
+                        .await;
+                }
+            }
+        }
+    }
+
+    async fn notify_messages_changed(&self) {
+        let subscribers = self
+            .subscribers
+            .lock()
+            .map(|subscribers| subscribers.clone())
+            .unwrap_or_default();
+        if subscribers.is_empty() {
+            return;
+        }
+        let context = self.mutation_context();
+        CompositeSubscriber::new(subscribers)
+            .on_messages_changed(&context, &self.messages)
+            .await;
+    }
+
+    async fn notify_state_changed(&self) {
+        let subscribers = self
+            .subscribers
+            .lock()
+            .map(|subscribers| subscribers.clone())
+            .unwrap_or_default();
+        if subscribers.is_empty() {
+            return;
+        }
+        let context = self.mutation_context();
+        CompositeSubscriber::new(subscribers)
+            .on_state_changed(&context, &self.state)
+            .await;
+    }
+
+    /// Appends a message and notifies subscribers (`on_new_message`,
+    /// `on_new_tool_call` for assistant tool calls, then `on_messages_changed`).
+    /// Mirrors TS `AbstractAgent.addMessage`.
+    pub async fn add_message(&mut self, message: Message) {
+        self.messages.push(message.clone());
+        self.notify_new_message(&message).await;
+        self.notify_messages_changed().await;
+    }
+
+    /// Appends multiple messages, notifying per-message then once at the end.
+    /// Mirrors TS `AbstractAgent.addMessages`.
+    pub async fn add_messages(&mut self, messages: Vec<Message>) {
+        for message in &messages {
+            self.messages.push(message.clone());
+        }
+        for message in &messages {
+            self.notify_new_message(message).await;
+        }
+        self.notify_messages_changed().await;
+    }
+
+    /// Replaces the entire message history and fires `on_messages_changed`.
+    /// Mirrors TS `AbstractAgent.setMessages`.
+    pub async fn set_messages(&mut self, messages: Vec<Message>) {
+        self.messages = messages;
+        self.notify_messages_changed().await;
+    }
+
+    /// Replaces the entire state and fires `on_state_changed`.
+    /// Mirrors TS `AbstractAgent.setState`.
+    pub async fn set_state(&mut self, state: State) {
+        self.state = state;
+        self.notify_state_changed().await;
+    }
+
     pub async fn run_agent(&mut self, params: RunAgentParameters) -> Result<RunAgentResult> {
         self.run_agent_cancellable(params, AbortHandle::new()).await
+    }
+
+    /// Runs the agent with an additional one-shot subscriber that participates
+    /// only in this run, alongside any permanently-registered subscribers.
+    /// Mirrors TS `runAgent(params, subscriber)`.
+    pub async fn run_agent_with(
+        &mut self,
+        params: RunAgentParameters,
+        temporary: Arc<dyn AgentSubscriber>,
+    ) -> Result<RunAgentResult> {
+        self.run_agent_inner(params, AbortHandle::new(), Some(temporary), false)
+            .await
     }
 
     pub async fn run_agent_cancellable(
@@ -209,6 +487,56 @@ impl<A: Agent + 'static> AgentRunner<A> {
         params: RunAgentParameters,
         abort: AbortHandle,
     ) -> Result<RunAgentResult> {
+        self.run_agent_inner(params, abort, None, false).await
+    }
+
+    /// Runs the agent via its [`Agent::connect`] implementation instead of
+    /// [`Agent::run`]. Mirrors TS `connectAgent`. If the agent does not
+    /// implement `connect`, returns [`AgUiError::ConnectNotImplemented`].
+    pub async fn connect_agent(&mut self, params: RunAgentParameters) -> Result<RunAgentResult> {
+        self.run_agent_inner(params, AbortHandle::new(), None, true)
+            .await
+    }
+
+    /// Connects with an additional one-shot subscriber for this run only.
+    pub async fn connect_agent_with(
+        &mut self,
+        params: RunAgentParameters,
+        temporary: Arc<dyn AgentSubscriber>,
+    ) -> Result<RunAgentResult> {
+        self.run_agent_inner(params, AbortHandle::new(), Some(temporary), true)
+            .await
+    }
+
+    /// Returns the underlying agent's declared capabilities, if any.
+    pub async fn capabilities(&self) -> Option<agui_rs_core::AgentCapabilities> {
+        self.agent.capabilities().await
+    }
+
+    async fn run_agent_inner(
+        &mut self,
+        params: RunAgentParameters,
+        abort: AbortHandle,
+        temporary: Option<Arc<dyn AgentSubscriber>>,
+        use_connect: bool,
+    ) -> Result<RunAgentResult> {
+        // Snapshot subscribers for this run: permanent registry + optional
+        // one-shot temporary subscriber, composed so the run loop sees a single
+        // subscriber that fans out in registration order.
+        let composite = {
+            let mut list = self
+                .subscribers
+                .lock()
+                .map(|subscribers| subscribers.clone())
+                .unwrap_or_default();
+            if let Some(temporary) = temporary {
+                list.push(temporary);
+            }
+            CompositeSubscriber::new(list)
+        };
+        let subscriber: Option<CompositeSubscriber> =
+            if composite.is_empty() { None } else { Some(composite) };
+
         let starting_messages_len = self.messages.len();
         let run_id = params.run_id.clone().unwrap_or_else(|| generate_id("run"));
 
@@ -239,14 +567,21 @@ impl<A: Agent + 'static> AgentRunner<A> {
             state: self.state.clone(),
         };
 
-        if let Some(subscriber) = &self.subscriber {
+        if let Some(subscriber) = &subscriber {
             subscriber.on_run_initialized(&context).await;
             subscriber.on_run_started(&context).await;
         }
 
+        if let Some(logger) = &self.debug_logger {
+            logger.log(&format!(
+                "Run started: thread={} run={}",
+                context.thread_id, context.run_id
+            ));
+        }
+
         if abort.is_aborted() {
             let err = AgUiError::Cancelled;
-            if let Some(subscriber) = &self.subscriber {
+            if let Some(subscriber) = &subscriber {
                 subscriber.on_run_failed(&context, &err).await;
             }
             return Err(err);
@@ -257,8 +592,13 @@ impl<A: Agent + 'static> AgentRunner<A> {
         let terminal = Arc::new(move |mw_input: MiddlewareInput| {
             let agent = agent_for_terminal.clone();
             let abort = abort_for_terminal.clone();
-            Box::pin(async move { agent.run_cancellable(mw_input.run_agent_input, abort).await })
-                as BoxFuture<'static, Result<EventStream>>
+            Box::pin(async move {
+                if use_connect {
+                    agent.connect_cancellable(mw_input.run_agent_input, abort).await
+                } else {
+                    agent.run_cancellable(mw_input.run_agent_input, abort).await
+                }
+            }) as BoxFuture<'static, Result<EventStream>>
         });
 
         let raw_stream = match self
@@ -267,8 +607,23 @@ impl<A: Agent + 'static> AgentRunner<A> {
             .await
         {
             Ok(stream) => stream,
+            // Mirror TS connectAgent: a ConnectNotImplemented from connect() is
+            // swallowed and the run completes with an empty result rather than
+            // surfacing as an error.
+            Err(AgUiError::ConnectNotImplemented) if use_connect => {
+                if let Some(subscriber) = &subscriber {
+                    subscriber.on_run_finalized(&context).await;
+                }
+                return Ok(RunAgentResult {
+                    run_id: context.run_id,
+                    thread_id: context.thread_id,
+                    new_messages: Vec::new(),
+                    new_state: self.state.clone(),
+                    outcome: None,
+                });
+            }
             Err(err) => {
-                if let Some(subscriber) = &self.subscriber {
+                if let Some(subscriber) = &subscriber {
                     subscriber.on_run_failed(&context, &err).await;
                 }
                 return Err(err);
@@ -295,7 +650,7 @@ impl<A: Agent + 'static> AgentRunner<A> {
             let applied = match item {
                 Ok(applied) => applied,
                 Err(err) => {
-                    if let Some(subscriber) = &self.subscriber {
+                    if let Some(subscriber) = &subscriber {
                         subscriber.on_run_failed(&context, &err).await;
                     }
                     return Err(err);
@@ -310,7 +665,7 @@ impl<A: Agent + 'static> AgentRunner<A> {
             apply_message_replacements(&mut context.messages, &message_replacements);
             apply_tool_call_replacements(&mut context.messages, &tool_call_replacements);
 
-            if let Some(subscriber) = &self.subscriber {
+            if let Some(subscriber) = &subscriber {
                 if context.messages.len() > previous_messages_len {
                     for idx in previous_messages_len..context.messages.len() {
                         let original_message_id = context.messages[idx].id().to_string();
@@ -422,7 +777,7 @@ impl<A: Agent + 'static> AgentRunner<A> {
                 _ => {}
             }
 
-            if let Some(subscriber) = &self.subscriber {
+            if let Some(subscriber) = &subscriber {
                 macro_rules! try_subscriber_hook {
                     ($call:expr) => {
                         if let Err(err) = $call.await {
@@ -791,8 +1146,15 @@ impl<A: Agent + 'static> AgentRunner<A> {
             }
         }
 
-        if let Some(subscriber) = &self.subscriber {
+        if let Some(subscriber) = &subscriber {
             subscriber.on_run_finished(&context).await;
+        }
+
+        if let Some(logger) = &self.debug_logger {
+            logger.log(&format!(
+                "Run finished: thread={} run={}",
+                context.thread_id, context.run_id
+            ));
         }
 
         Ok(RunAgentResult {
@@ -811,6 +1173,27 @@ fn generate_id(prefix: &str) -> String {
         .map(|duration| duration.as_micros())
         .unwrap_or_default();
     format!("{prefix}-{micros}")
+}
+
+/// Compares two dotted numeric versions (e.g. "0.1.0" vs "0.0.45"), returning
+/// `true` when `lhs <= rhs`. Missing segments are treated as zero. Used to gate
+/// auto-insertion of backward-compatibility middleware.
+fn version_lte(lhs: &str, rhs: &str) -> bool {
+    fn parse(v: &str) -> Vec<u64> {
+        v.split('.')
+            .map(|part| part.trim().parse::<u64>().unwrap_or(0))
+            .collect()
+    }
+    let (a, b) = (parse(lhs), parse(rhs));
+    let len = a.len().max(b.len());
+    for i in 0..len {
+        let x = a.get(i).copied().unwrap_or(0);
+        let y = b.get(i).copied().unwrap_or(0);
+        if x != y {
+            return x < y;
+        }
+    }
+    true
 }
 
 fn apply_message_replacements(messages: &mut [Message], replacements: &HashMap<String, Message>) {

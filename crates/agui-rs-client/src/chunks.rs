@@ -1,5 +1,5 @@
 use agui_rs_core::{
-    BaseEventFields, Event, ReasoningMessageChunkEvent, ReasoningMessageContentEvent,
+    AgUiError, BaseEventFields, Event, ReasoningMessageChunkEvent, ReasoningMessageContentEvent,
     ReasoningMessageEndEvent, ReasoningMessageRole, ReasoningMessageStartEvent, Result,
     TextMessageChunkEvent, TextMessageContentEvent, TextMessageEndEvent, TextMessageRole,
     TextMessageStartEvent, ToolCallArgsEvent, ToolCallChunkEvent, ToolCallEndEvent,
@@ -8,19 +8,38 @@ use agui_rs_core::{
 use async_stream::try_stream;
 use futures::{stream::BoxStream, Stream, StreamExt};
 
+/// The single chunk stream currently being expanded.
+///
+/// Mirrors the `mode` state machine in the TypeScript `transformChunks`: at
+/// most one of text / tool-call / reasoning is open at a time, and opening a
+/// new one (or any structured non-chunk event) first closes the active one.
 #[derive(Debug, Clone)]
-struct OpenTextMessage {
-    message_id: String,
+enum OpenChunk {
+    Text { message_id: String },
+    Tool { tool_call_id: String },
+    Reasoning { message_id: String },
 }
 
-#[derive(Debug, Clone)]
-struct OpenToolCall {
-    tool_call_id: String,
-}
-
-#[derive(Debug, Clone)]
-struct OpenReasoningMessage {
-    message_id: String,
+impl OpenChunk {
+    /// Produces the `*_END` event that closes this open chunk stream.
+    fn close(self) -> Event {
+        match self {
+            OpenChunk::Text { message_id } => Event::TextMessageEnd(TextMessageEndEvent {
+                message_id,
+                base: BaseEventFields::default(),
+            }),
+            OpenChunk::Tool { tool_call_id } => Event::ToolCallEnd(ToolCallEndEvent {
+                tool_call_id,
+                base: BaseEventFields::default(),
+            }),
+            OpenChunk::Reasoning { message_id } => {
+                Event::ReasoningMessageEnd(ReasoningMessageEndEvent {
+                    message_id,
+                    base: BaseEventFields::default(),
+                })
+            }
+        }
+    }
 }
 
 pub fn expand_chunks<S>(stream: S) -> BoxStream<'static, Result<Event>>
@@ -29,186 +48,88 @@ where
 {
     Box::pin(try_stream! {
         let mut stream = stream.boxed();
-        let mut open_text: Option<OpenTextMessage> = None;
-        let mut open_tool: Option<OpenToolCall> = None;
-        let mut open_reasoning: Option<OpenReasoningMessage> = None;
+        let mut open: Option<OpenChunk> = None;
 
         while let Some(item) = stream.next().await {
             let event = item?;
             match event {
                 Event::TextMessageChunk(chunk) => {
-                    for event in expand_text_chunk(
-                        &mut open_text,
-                        &mut open_tool,
-                        &mut open_reasoning,
-                        chunk,
-                    )? {
+                    for event in expand_text_chunk(&mut open, chunk)? {
                         yield event;
                     }
                 }
                 Event::ToolCallChunk(chunk) => {
-                    for event in expand_tool_chunk(
-                        &mut open_text,
-                        &mut open_tool,
-                        &mut open_reasoning,
-                        chunk,
-                    )? {
+                    for event in expand_tool_chunk(&mut open, chunk)? {
                         yield event;
                     }
                 }
                 Event::ReasoningMessageChunk(chunk) => {
-                    for event in expand_reasoning_chunk(
-                        &mut open_text,
-                        &mut open_tool,
-                        &mut open_reasoning,
-                        chunk,
-                    )? {
+                    for event in expand_reasoning_chunk(&mut open, chunk)? {
                         yield event;
                     }
                 }
+                // These events pass through without disturbing an open chunk
+                // stream, matching the dedicated passthrough arm in TS.
+                Event::Raw(_)
+                | Event::ActivitySnapshot(_)
+                | Event::ActivityDelta(_)
+                | Event::ReasoningEncryptedValue(_) => yield event,
+                // Every other structured event (including TOOL_CALL_RESULT and
+                // CUSTOM) closes any pending chunk stream first.
                 other => {
-                    if let Some(end) = close_pending_for_non_chunk(
-                        &mut open_text,
-                        &mut open_tool,
-                        &mut open_reasoning,
-                        &other,
-                    ) {
-                        yield end;
+                    if let Some(pending) = open.take() {
+                        yield pending.close();
                     }
                     yield other;
                 }
             }
         }
 
-        if let Some(text) = open_text.take() {
-            yield Event::TextMessageEnd(TextMessageEndEvent {
-                message_id: text.message_id,
-                base: BaseEventFields::default(),
-            });
-        }
-        if let Some(tool) = open_tool.take() {
-            yield Event::ToolCallEnd(ToolCallEndEvent {
-                tool_call_id: tool.tool_call_id,
-                base: BaseEventFields::default(),
-            });
-        }
-        if let Some(reasoning) = open_reasoning.take() {
-            yield Event::ReasoningMessageEnd(ReasoningMessageEndEvent {
-                message_id: reasoning.message_id,
-                base: BaseEventFields::default(),
-            });
+        if let Some(pending) = open.take() {
+            yield pending.close();
         }
     })
 }
 
-fn close_pending_for_non_chunk(
-    open_text: &mut Option<OpenTextMessage>,
-    open_tool: &mut Option<OpenToolCall>,
-    open_reasoning: &mut Option<OpenReasoningMessage>,
-    event: &Event,
-) -> Option<Event> {
-    match event {
-        Event::Raw(_)
-        | Event::Custom(_)
-        | Event::ToolCallResult(_)
-        | Event::ActivitySnapshot(_)
-        | Event::ActivityDelta(_)
-        | Event::ReasoningEncryptedValue(_) => None,
-        _ => {
-            if let Some(text) = open_text.take() {
-                return Some(Event::TextMessageEnd(TextMessageEndEvent {
-                    message_id: text.message_id,
-                    base: BaseEventFields::default(),
-                }));
-            }
-            if let Some(tool) = open_tool.take() {
-                return Some(Event::ToolCallEnd(ToolCallEndEvent {
-                    tool_call_id: tool.tool_call_id,
-                    base: BaseEventFields::default(),
-                }));
-            }
-            if let Some(reasoning) = open_reasoning.take() {
-                return Some(Event::ReasoningMessageEnd(ReasoningMessageEndEvent {
-                    message_id: reasoning.message_id,
-                    base: BaseEventFields::default(),
-                }));
-            }
-            None
-        }
-    }
-}
-
 fn expand_text_chunk(
-    open_text: &mut Option<OpenTextMessage>,
-    open_tool: &mut Option<OpenToolCall>,
-    open_reasoning: &mut Option<OpenReasoningMessage>,
+    open: &mut Option<OpenChunk>,
     chunk: TextMessageChunkEvent,
 ) -> Result<Vec<Event>> {
     let mut events = Vec::new();
 
-    if open_tool.is_some() {
-        let tool = open_tool
-            .take()
-            .ok_or_else(|| agui_rs_core::AgUiError::protocol("tool call state missing"))?;
-        events.push(Event::ToolCallEnd(ToolCallEndEvent {
-            tool_call_id: tool.tool_call_id,
-            base: BaseEventFields::default(),
-        }));
-    }
-    if open_reasoning.is_some() {
-        let reasoning = open_reasoning
-            .take()
-            .ok_or_else(|| agui_rs_core::AgUiError::protocol("reasoning message state missing"))?;
-        events.push(Event::ReasoningMessageEnd(ReasoningMessageEndEvent {
-            message_id: reasoning.message_id,
-            base: BaseEventFields::default(),
-        }));
-    }
-
-    let message_id = chunk.message_id.clone();
-    let delta = chunk.delta.clone();
-
-    let should_switch_message = match (&open_text, message_id.as_deref()) {
-        (Some(open), Some(message_id)) if open.message_id != message_id => true,
-        (Some(_), None) if delta.is_none() => true,
-        _ => false,
-    };
-
-    if should_switch_message {
-        let current = open_text
-            .take()
-            .ok_or_else(|| agui_rs_core::AgUiError::protocol("text message state missing"))?;
-        events.push(Event::TextMessageEnd(TextMessageEndEvent {
-            message_id: current.message_id,
-            base: BaseEventFields::default(),
-        }));
-    }
-
-    if open_text.is_none() {
-        if let Some(message_id) = message_id {
-            open_text.replace(OpenTextMessage {
-                message_id: message_id.clone(),
-            });
-            events.push(Event::TextMessageStart(TextMessageStartEvent {
-                message_id,
-                role: chunk.role.unwrap_or(TextMessageRole::Assistant),
-                name: chunk.name,
-                base: BaseEventFields::default(),
-            }));
+    // Close the active stream when it isn't this text message, or when a
+    // different message id arrives. A same-id / id-less chunk continues it.
+    let id_switch = matches!(
+        (open.as_ref(), chunk.message_id.as_deref()),
+        (Some(OpenChunk::Text { message_id }), Some(incoming)) if message_id != incoming
+    );
+    if !matches!(open, Some(OpenChunk::Text { .. })) || id_switch {
+        if let Some(pending) = open.take() {
+            events.push(pending.close());
         }
     }
 
-    if let Some(delta) = delta {
-        let message_id = open_text
-            .as_ref()
-            .map(|open| open.message_id.clone())
-            .ok_or_else(|| {
-                agui_rs_core::AgUiError::validation(
-                    "first TEXT_MESSAGE_CHUNK must include message_id",
-                )
-            })?;
-        events.push(Event::TextMessageContent(TextMessageContentEvent {
+    if !matches!(open, Some(OpenChunk::Text { .. })) {
+        let message_id = chunk
+            .message_id
+            .ok_or_else(|| AgUiError::validation("first TEXT_MESSAGE_CHUNK must include message_id"))?;
+        *open = Some(OpenChunk::Text {
+            message_id: message_id.clone(),
+        });
+        events.push(Event::TextMessageStart(TextMessageStartEvent {
             message_id,
+            role: chunk.role.unwrap_or(TextMessageRole::Assistant),
+            name: chunk.name,
+            base: BaseEventFields::default(),
+        }));
+    }
+
+    if let Some(delta) = chunk.delta {
+        let Some(OpenChunk::Text { message_id }) = open.as_ref() else {
+            unreachable!("text chunk just opened or continued a text message");
+        };
+        events.push(Event::TextMessageContent(TextMessageContentEvent {
+            message_id: message_id.clone(),
             delta,
             base: BaseEventFields::default(),
         }));
@@ -218,59 +139,29 @@ fn expand_text_chunk(
 }
 
 fn expand_tool_chunk(
-    open_text: &mut Option<OpenTextMessage>,
-    open_tool: &mut Option<OpenToolCall>,
-    open_reasoning: &mut Option<OpenReasoningMessage>,
+    open: &mut Option<OpenChunk>,
     chunk: ToolCallChunkEvent,
 ) -> Result<Vec<Event>> {
     let mut events = Vec::new();
 
-    if open_text.is_some() {
-        let text = open_text
-            .take()
-            .ok_or_else(|| agui_rs_core::AgUiError::protocol("text message state missing"))?;
-        events.push(Event::TextMessageEnd(TextMessageEndEvent {
-            message_id: text.message_id,
-            base: BaseEventFields::default(),
-        }));
-    }
-    if open_reasoning.is_some() {
-        let reasoning = open_reasoning
-            .take()
-            .ok_or_else(|| agui_rs_core::AgUiError::protocol("reasoning message state missing"))?;
-        events.push(Event::ReasoningMessageEnd(ReasoningMessageEndEvent {
-            message_id: reasoning.message_id,
-            base: BaseEventFields::default(),
-        }));
+    let id_switch = matches!(
+        (open.as_ref(), chunk.tool_call_id.as_deref()),
+        (Some(OpenChunk::Tool { tool_call_id }), Some(incoming)) if tool_call_id != incoming
+    );
+    if !matches!(open, Some(OpenChunk::Tool { .. })) || id_switch {
+        if let Some(pending) = open.take() {
+            events.push(pending.close());
+        }
     }
 
-    let tool_call_id = chunk.tool_call_id.clone();
-    let delta = chunk.delta.clone();
-
-    let should_switch_tool = match (&open_tool, tool_call_id.as_deref()) {
-        (Some(open), Some(tool_call_id)) if open.tool_call_id != tool_call_id => true,
-        (Some(_), None) if delta.is_none() => true,
-        _ => false,
-    };
-
-    if should_switch_tool {
-        let current = open_tool
-            .take()
-            .ok_or_else(|| agui_rs_core::AgUiError::protocol("tool call state missing"))?;
-        events.push(Event::ToolCallEnd(ToolCallEndEvent {
-            tool_call_id: current.tool_call_id,
-            base: BaseEventFields::default(),
-        }));
-    }
-
-    if open_tool.is_none() {
-        let tool_call_id = tool_call_id.ok_or_else(|| {
-            agui_rs_core::AgUiError::validation("first TOOL_CALL_CHUNK must include tool_call_id")
+    if !matches!(open, Some(OpenChunk::Tool { .. })) {
+        let tool_call_id = chunk
+            .tool_call_id
+            .ok_or_else(|| AgUiError::validation("first TOOL_CALL_CHUNK must include tool_call_id"))?;
+        let tool_call_name = chunk.tool_call_name.ok_or_else(|| {
+            AgUiError::validation("first TOOL_CALL_CHUNK must include tool_call_name")
         })?;
-        let tool_call_name = chunk.tool_call_name.clone().ok_or_else(|| {
-            agui_rs_core::AgUiError::validation("first TOOL_CALL_CHUNK must include tool_call_name")
-        })?;
-        open_tool.replace(OpenToolCall {
+        *open = Some(OpenChunk::Tool {
             tool_call_id: tool_call_id.clone(),
         });
         events.push(Event::ToolCallStart(ToolCallStartEvent {
@@ -281,17 +172,12 @@ fn expand_tool_chunk(
         }));
     }
 
-    if let Some(delta) = delta {
-        let tool_call_id = open_tool
-            .as_ref()
-            .map(|open| open.tool_call_id.clone())
-            .ok_or_else(|| {
-                agui_rs_core::AgUiError::validation(
-                    "TOOL_CALL_CHUNK received without active tool call",
-                )
-            })?;
+    if let Some(delta) = chunk.delta {
+        let Some(OpenChunk::Tool { tool_call_id }) = open.as_ref() else {
+            unreachable!("tool chunk just opened or continued a tool call");
+        };
         events.push(Event::ToolCallArgs(ToolCallArgsEvent {
-            tool_call_id,
+            tool_call_id: tool_call_id.clone(),
             delta,
             base: BaseEventFields::default(),
         }));
@@ -301,80 +187,44 @@ fn expand_tool_chunk(
 }
 
 fn expand_reasoning_chunk(
-    open_text: &mut Option<OpenTextMessage>,
-    open_tool: &mut Option<OpenToolCall>,
-    open_reasoning: &mut Option<OpenReasoningMessage>,
+    open: &mut Option<OpenChunk>,
     chunk: ReasoningMessageChunkEvent,
 ) -> Result<Vec<Event>> {
     let mut events = Vec::new();
 
-    if open_text.is_some() {
-        let text = open_text
-            .take()
-            .ok_or_else(|| agui_rs_core::AgUiError::protocol("text message state missing"))?;
-        events.push(Event::TextMessageEnd(TextMessageEndEvent {
-            message_id: text.message_id,
-            base: BaseEventFields::default(),
-        }));
-    }
-    if open_tool.is_some() {
-        let tool = open_tool
-            .take()
-            .ok_or_else(|| agui_rs_core::AgUiError::protocol("tool call state missing"))?;
-        events.push(Event::ToolCallEnd(ToolCallEndEvent {
-            tool_call_id: tool.tool_call_id,
-            base: BaseEventFields::default(),
-        }));
-    }
-
-    let message_id = chunk.message_id.clone();
-    let delta = chunk.delta.clone();
-
-    let should_switch_message = match (&open_reasoning, message_id.as_deref()) {
-        (Some(open), Some(message_id)) if open.message_id != message_id => true,
-        (Some(_), None) if delta.is_none() => true,
-        _ => false,
-    };
-
-    if should_switch_message {
-        let current = open_reasoning
-            .take()
-            .ok_or_else(|| agui_rs_core::AgUiError::protocol("reasoning message state missing"))?;
-        events.push(Event::ReasoningMessageEnd(ReasoningMessageEndEvent {
-            message_id: current.message_id,
-            base: BaseEventFields::default(),
-        }));
-    }
-
-    if open_reasoning.is_none() {
-        if let Some(message_id) = message_id {
-            open_reasoning.replace(OpenReasoningMessage {
-                message_id: message_id.clone(),
-            });
-            events.push(Event::ReasoningMessageStart(ReasoningMessageStartEvent {
-                message_id,
-                role: ReasoningMessageRole::Reasoning,
-                base: BaseEventFields::default(),
-            }));
+    let id_switch = matches!(
+        (open.as_ref(), chunk.message_id.as_deref()),
+        (Some(OpenChunk::Reasoning { message_id }), Some(incoming)) if message_id != incoming
+    );
+    if !matches!(open, Some(OpenChunk::Reasoning { .. })) || id_switch {
+        if let Some(pending) = open.take() {
+            events.push(pending.close());
         }
     }
 
-    if let Some(delta) = delta {
-        let message_id = open_reasoning
-            .as_ref()
-            .map(|open| open.message_id.clone())
-            .ok_or_else(|| {
-                agui_rs_core::AgUiError::validation(
-                    "first REASONING_MESSAGE_CHUNK must include message_id",
-                )
-            })?;
-        events.push(Event::ReasoningMessageContent(
-            ReasoningMessageContentEvent {
-                message_id,
-                delta,
-                base: BaseEventFields::default(),
-            },
-        ));
+    if !matches!(open, Some(OpenChunk::Reasoning { .. })) {
+        let message_id = chunk.message_id.ok_or_else(|| {
+            AgUiError::validation("first REASONING_MESSAGE_CHUNK must include message_id")
+        })?;
+        *open = Some(OpenChunk::Reasoning {
+            message_id: message_id.clone(),
+        });
+        events.push(Event::ReasoningMessageStart(ReasoningMessageStartEvent {
+            message_id,
+            role: ReasoningMessageRole::Reasoning,
+            base: BaseEventFields::default(),
+        }));
+    }
+
+    if let Some(delta) = chunk.delta {
+        let Some(OpenChunk::Reasoning { message_id }) = open.as_ref() else {
+            unreachable!("reasoning chunk just opened or continued a reasoning message");
+        };
+        events.push(Event::ReasoningMessageContent(ReasoningMessageContentEvent {
+            message_id: message_id.clone(),
+            delta,
+            base: BaseEventFields::default(),
+        }));
     }
 
     Ok(events)

@@ -190,4 +190,6 @@ async fn handles_mixed_thinking_and_regular_events() {
 }
 
 // SKIPPED: warnAboutTransformation should not throw when process is undefined: Rust implementation uses std::env directly and does not model browser-global `process`.
-// SKIPPED: automatically transforms THINKING events when maxVersion <= 0.0.45: Rust tests target the middleware submodule directly; there is no auto-insertion layer to exercise here.
+// IMPLEMENTED: max-version auto-insertion (`<= 0.0.45` rewrites THINKING→REASONING)
+// is now covered in tests/middleware_auto_insertion.rs via
+// AgentRunner::with_max_version.

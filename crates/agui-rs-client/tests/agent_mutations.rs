@@ -152,5 +152,8 @@ async fn new_messages_are_appended_after_initial_messages() {
     assert_eq!(result.new_messages[0].id(), "m1");
 }
 
-// SKIPPED: TypeScript addMessage/addMessages/setMessages/setState APIs do not exist in the Rust SDK.
-// SKIPPED: direct subscriber mutation-hook replacement cannot be authored in integration tests because NewMessageContext/NewToolCallContext are crate-private.
+// IMPLEMENTED: addMessage/addMessages/setMessages/setState are now on
+// AgentRunner — covered in tests/agent_mutators.rs.
+// NOTE: NewMessageContext/NewToolCallContext are now public, so subscriber
+// replacement hooks can be authored in integration tests (see
+// tests/agent_mutators.rs).

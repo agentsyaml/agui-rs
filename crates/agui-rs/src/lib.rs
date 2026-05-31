@@ -24,7 +24,7 @@
 //! use agui_rs::prelude::*;
 //! ```
 
-#![doc(html_root_url = "https://docs.rs/agui-rs/0.1.0")]
+#![doc(html_root_url = "https://docs.rs/agui-rs/0.1.1")]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
 #[cfg(feature = "core")]
@@ -34,6 +34,10 @@ pub use agui_rs_core as core;
 #[cfg(feature = "encoder")]
 #[cfg_attr(docsrs, doc(cfg(feature = "encoder")))]
 pub use agui_rs_encoder as encoder;
+
+#[cfg(feature = "proto")]
+#[cfg_attr(docsrs, doc(cfg(feature = "proto")))]
+pub use agui_rs_proto as proto;
 
 #[cfg(feature = "client")]
 #[cfg_attr(docsrs, doc(cfg(feature = "client")))]

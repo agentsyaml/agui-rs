@@ -18,13 +18,15 @@ name = "agui_rs"
 default = ["core"]
 core    = ["dep:agui-rs-core"]
 encoder = ["dep:agui-rs-encoder", "core"]
+proto   = ["dep:agui-rs-proto", "core"]
 client  = ["dep:agui-rs-client", "core"]
 server  = ["dep:agui-rs-server", "core", "encoder"]
-full    = ["client", "server", "encoder"]
+full    = ["client", "server", "encoder", "proto"]
 
 [dependencies]
 agui-rs-core    = { workspace = true, optional = true }
 agui-rs-encoder = { workspace = true, optional = true }
+agui-rs-proto   = { workspace = true, optional = true }
 agui-rs-client  = { workspace = true, optional = true }
 agui-rs-server  = { workspace = true, optional = true }
 

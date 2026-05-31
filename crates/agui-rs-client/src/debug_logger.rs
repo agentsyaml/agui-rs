@@ -1,6 +1,7 @@
-use crate::{AgUiError, Event};
+use agui_rs_core::{AgUiError, Event};
 use std::env;
 
+#[derive(Debug, Clone)]
 pub struct DebugLogger {
     enabled: bool,
     prefix: String,
@@ -10,6 +11,16 @@ impl DebugLogger {
     pub fn new(prefix: impl Into<String>) -> Self {
         Self {
             enabled: env_debug_enabled(),
+            prefix: prefix.into(),
+        }
+    }
+
+    /// Creates a logger that is always enabled, regardless of environment.
+    /// Used when the caller explicitly opts into debug logging
+    /// (e.g. `AgentConfig { debug: true, .. }`), mirroring TS `debug: true`.
+    pub fn forced(prefix: impl Into<String>) -> Self {
+        Self {
+            enabled: true,
             prefix: prefix.into(),
         }
     }

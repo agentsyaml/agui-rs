@@ -4,6 +4,7 @@
 //! - [`RunHandler`] for converting [`agui_rs_core::RunAgentInput`] into a stream of AG-UI events.
 //! - [`EventEmitter`] channel helpers for producing typed event streams.
 //! - [`sse_body`] for turning AG-UI event streams into SSE bodies.
+//! - [`proto_body`] for turning AG-UI event streams into length-prefixed protobuf bodies.
 //! - [`agui_route`] / [`agui_router`] for axum integration.
 
 pub mod axum;
@@ -16,4 +17,4 @@ pub use crate::axum::{agui_route, agui_router, serve};
 pub use crate::emit::{channel, EventEmitter, EventSink};
 pub use crate::error::{AgUiError, Result};
 pub use crate::handler::{RunContext, RunHandler};
-pub use crate::sse::sse_body;
+pub use crate::sse::{proto_body, sse_body};

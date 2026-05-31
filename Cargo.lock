@@ -4,19 +4,22 @@ version = 3
 
 [[package]]
 name = "agui-rs"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "agui-rs-client",
  "agui-rs-core",
  "agui-rs-encoder",
+ "agui-rs-proto",
  "agui-rs-server",
 ]
 
 [[package]]
 name = "agui-rs-client"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "agui-rs-core",
+ "agui-rs-encoder",
+ "agui-rs-proto",
  "async-stream",
  "async-trait",
  "bytes",
@@ -37,7 +40,7 @@ dependencies = [
 
 [[package]]
 name = "agui-rs-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -47,16 +50,27 @@ dependencies = [
 
 [[package]]
 name = "agui-rs-encoder"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "agui-rs-core",
+ "agui-rs-proto",
  "serde_json",
  "thiserror 1.0.69",
 ]
 
 [[package]]
+name = "agui-rs-proto"
+version = "0.1.1"
+dependencies = [
+ "agui-rs-core",
+ "prost",
+ "prost-types",
+ "serde_json",
+]
+
+[[package]]
 name = "agui-rs-server"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "agui-rs-core",
  "agui-rs-encoder",
@@ -238,6 +252,12 @@ dependencies = [
  "quote",
  "syn",
 ]
+
+[[package]]
+name = "either"
+version = "1.16.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "91622ff5e7162018101f2fea40d6ebf4a78bbe5a49736a2020649edf9693679e"
 
 [[package]]
 name = "equivalent"
@@ -668,6 +688,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d98f6fed1fde3f8c21bc40a1abb88dd75e67924f9cffc3ef95607bad8017f8e2"
 
 [[package]]
+name = "itertools"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2b192c782037fadd9cfa75548310488aabdbf3d2da73885b31bd0abd03351285"
+dependencies = [
+ "either",
+]
+
+[[package]]
 name = "itoa"
 version = "1.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -836,6 +865,38 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8fd00f0bb2e90d81d1044c2b32617f68fcb9fa3bb7640c23e9c748e53fb30934"
 dependencies = [
  "unicode-ident",
+]
+
+[[package]]
+name = "prost"
+version = "0.13.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2796faa41db3ec313a31f7624d9286acf277b52de526150b7e69f3debf891ee5"
+dependencies = [
+ "bytes",
+ "prost-derive",
+]
+
+[[package]]
+name = "prost-derive"
+version = "0.13.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8a56d757972c98b346a9b766e3f02746cde6dd1cd1d1d563472929fdd74bec4d"
+dependencies = [
+ "anyhow",
+ "itertools",
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
+name = "prost-types"
+version = "0.13.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "52c2c1bf36ddb1a1c396b3601a3cec27c2462e45f07c386894ec3ccf5332bd16"
+dependencies = [
+ "prost",
 ]
 
 [[package]]

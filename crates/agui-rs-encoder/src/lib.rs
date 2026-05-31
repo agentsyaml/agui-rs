@@ -47,10 +47,16 @@ impl EventEncoder {
         }
     }
 
-    pub fn encode_protobuf(&self, _event: &Event) -> Result<Vec<u8>> {
-        Err(AgUiError::Unsupported(
-            "protobuf encoding is not implemented in this build".into(),
-        ))
+    /// Encodes an event as a length-prefixed protobuf message: a 4-byte
+    /// big-endian `uint32` length header followed by the encoded `Event`
+    /// message. Mirrors the canonical TypeScript `EventEncoder.encodeProtobuf`.
+    pub fn encode_protobuf(&self, event: &Event) -> Result<Vec<u8>> {
+        let message = agui_rs_proto::encode(event)?;
+        let length = message.len() as u32;
+        let mut framed = Vec::with_capacity(4 + message.len());
+        framed.extend_from_slice(&length.to_be_bytes());
+        framed.extend_from_slice(&message);
+        Ok(framed)
     }
 }
 
@@ -115,10 +121,13 @@ mod tests {
     }
 
     #[test]
-    fn protobuf_encode_returns_unsupported() {
+    fn protobuf_encode_produces_length_prefixed_bytes() {
         let enc = EventEncoder::with_accept(Some(AGUI_MEDIA_TYPE_PROTOBUF));
         let event = factory::step_started("step-1");
-        let err = enc.encode_binary(&event).unwrap_err();
-        assert!(matches!(err, AgUiError::Unsupported(_)));
+        let bytes = enc.encode_binary(&event).unwrap();
+        // 4-byte big-endian length prefix + body of that length.
+        assert!(bytes.len() > 4);
+        let len = u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as usize;
+        assert_eq!(len, bytes.len() - 4);
     }
 }

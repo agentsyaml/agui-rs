@@ -827,3 +827,8 @@ async fn run_context_clone_preserves_messages_and_state() {
 // SKIPPED: stopPropagation chaining from TypeScript does not exist in the Rust AgentSubscriber API.
 // SKIPPED: runSubscribersWithMutation isolation contract is a TypeScript-only helper and has no Rust equivalent.
 // SKIPPED: browser-process freeze behavior is TypeScript runtime-specific and not modeled in Rust.
+//
+// NOTE: subscribe/unsubscribe, multi-subscriber registration + ordering, and
+// temporary (per-run) subscribers are now implemented and tested in
+// tests/subscriber_registry.rs. addMessage/addMessages/setMessages/setState
+// notification behaviour is tested in tests/agent_mutators.rs.

@@ -16,8 +16,12 @@ name = "agui_rs_encoder"
 
 [dependencies]
 agui-rs-core = { workspace = true }
+agui-rs-proto = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+
+[dev-dependencies]
+agui-rs-proto = { workspace = true }
 
 [package.metadata.docs.rs]
 all-features = true

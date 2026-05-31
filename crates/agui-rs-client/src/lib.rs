@@ -20,7 +20,9 @@ mod subscriber;
 mod transform;
 mod verify;
 
-pub use agent::{Agent, AgentConfig, AgentRunner, RunAgentParameters, RunAgentResult};
+pub use agent::{
+    Agent, AgentConfig, AgentRunner, RunAgentParameters, RunAgentResult, Subscription,
+};
 pub use apply::{default_apply_events, AppliedEvent};
 pub use chunks::expand_chunks;
 pub use compact::compact_events;
@@ -32,7 +34,11 @@ pub use interrupts::{
     ResumeResponse,
 };
 pub use legacy::convert_legacy_events;
-pub use middleware::{Middleware, MiddlewareChain};
+pub use middleware::{
+    backward_compat::{BackwardCompat0_0_39, BackwardCompat0_0_45, BackwardCompat0_0_47},
+    filter_tool_calls::{FilterToolCallsConfig, FilterToolCallsMiddleware},
+    Middleware, MiddlewareChain,
+};
 pub use subscriber::{
     ActivityDeltaContext, ActivitySnapshotContext, AgentSubscriber, EventContext, InterruptContext,
     NewMessageContext, NewToolCallContext, ReasoningContentContext, ReasoningEndContext,
@@ -40,8 +46,8 @@ pub use subscriber::{
     ToolCallArgsContext, ToolCallEndContext, ToolCallResultContext,
 };
 pub use transform::{
-    detect_stream_format, parse_sse_stream, StreamFormat, AGUI_MEDIA_TYPE_PROTOBUF,
-    AGUI_MEDIA_TYPE_SSE,
+    detect_stream_format, parse_proto_stream, parse_sse_stream, StreamFormat,
+    AGUI_MEDIA_TYPE_PROTOBUF, AGUI_MEDIA_TYPE_SSE,
 };
 pub use verify::verify_events;
 

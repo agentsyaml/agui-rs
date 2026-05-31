@@ -1,9 +1,11 @@
 use crate::agent::{abortable_event_stream, AbortHandle, Agent, AgentConfig, EventStream};
-use crate::transform::{detect_stream_format, parse_sse_stream, StreamFormat, AGUI_MEDIA_TYPE_SSE};
+use crate::transform::{
+    detect_stream_format, parse_proto_stream, parse_sse_stream, StreamFormat, AGUI_MEDIA_TYPE_SSE,
+};
 use agui_rs_core::{AgUiError, Event, Result, RunAgentInput};
 use async_trait::async_trait;
 use futures::future::BoxFuture;
-use futures::{stream, stream::BoxStream};
+use futures::stream::BoxStream;
 use reqwest::header::{ACCEPT, CONTENT_TYPE};
 use std::collections::HashMap;
 use std::fmt;
@@ -130,11 +132,7 @@ impl Agent for HttpAgent {
 
         let stream: BoxStream<'static, Result<Event>> = match format {
             StreamFormat::Sse => parse_sse_stream(response.bytes_stream()),
-            StreamFormat::Protobuf => Box::pin(stream::once(async {
-                Err(AgUiError::unsupported(
-                    "protobuf decoding is not implemented",
-                ))
-            })),
+            StreamFormat::Protobuf => parse_proto_stream(response.bytes_stream()),
         };
 
         Ok(abortable_event_stream(stream, abort))
