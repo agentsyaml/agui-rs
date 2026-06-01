@@ -120,9 +120,15 @@ fn content_part_to_proto(part: &InputContent) -> Option<pb::InputContent> {
         InputContent::Text { text } => {
             pb::input_content::Part::Text(pb::TextInputPart { text: text.clone() })
         }
-        InputContent::Image { source, metadata } => pb::input_content::Part::Image(media(source, metadata)),
-        InputContent::Audio { source, metadata } => pb::input_content::Part::Audio(media(source, metadata)),
-        InputContent::Video { source, metadata } => pb::input_content::Part::Video(media(source, metadata)),
+        InputContent::Image { source, metadata } => {
+            pb::input_content::Part::Image(media(source, metadata))
+        }
+        InputContent::Audio { source, metadata } => {
+            pb::input_content::Part::Audio(media(source, metadata))
+        }
+        InputContent::Video { source, metadata } => {
+            pb::input_content::Part::Video(media(source, metadata))
+        }
         InputContent::Document { source, metadata } => {
             pb::input_content::Part::Document(media(source, metadata))
         }
@@ -152,7 +158,10 @@ fn content_part_to_proto(part: &InputContent) -> Option<pb::InputContent> {
             let mut meta = serde_json::Map::new();
             meta.insert("legacyBinary".into(), serde_json::Value::Bool(true));
             if let Some(filename) = &content.filename {
-                meta.insert("filename".into(), serde_json::Value::String(filename.clone()));
+                meta.insert(
+                    "filename".into(),
+                    serde_json::Value::String(filename.clone()),
+                );
             }
             if let Some(id) = &content.id {
                 meta.insert("id".into(), serde_json::Value::String(id.clone()));
@@ -264,7 +273,13 @@ fn message_from_proto(proto: pb::ProtoMessage) -> Result<Message> {
             tool_calls: if proto.tool_calls.is_empty() {
                 None
             } else {
-                Some(proto.tool_calls.into_iter().map(tool_call_from_proto).collect())
+                Some(
+                    proto
+                        .tool_calls
+                        .into_iter()
+                        .map(tool_call_from_proto)
+                        .collect(),
+                )
             },
             encrypted_value: None,
         }),
@@ -328,7 +343,9 @@ fn interrupt_to_proto(interrupt: &Interrupt) -> pb::Interrupt {
 }
 
 fn interrupt_from_proto(proto: pb::Interrupt) -> Interrupt {
-    fn as_object(value: Option<&prost_types::Value>) -> Option<serde_json::Map<String, serde_json::Value>> {
+    fn as_object(
+        value: Option<&prost_types::Value>,
+    ) -> Option<serde_json::Map<String, serde_json::Value>> {
         match value.map(proto_to_json) {
             Some(serde_json::Value::Object(map)) => Some(map),
             _ => None,
@@ -370,7 +387,11 @@ fn patch_op_to_proto(op: &serde_json::Value) -> Result<pb::JsonPatchOperation> {
     };
     Ok(pb::JsonPatchOperation {
         op: op_enum as i32,
-        path: obj.get("path").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
+        path: obj
+            .get("path")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string(),
         from: obj.get("from").and_then(|v| v.as_str()).map(String::from),
         value: obj.get("value").map(json_to_proto),
     })
@@ -453,7 +474,11 @@ fn to_proto_event(event: &Event) -> Result<pb::event::Event> {
         }),
         Event::StateDelta(ev) => PE::StateDelta(pb::StateDeltaEvent {
             base_event: Some(base_to_proto(&ev.base, pb::EventType::StateDelta)),
-            delta: ev.delta.iter().map(patch_op_to_proto).collect::<Result<_>>()?,
+            delta: ev
+                .delta
+                .iter()
+                .map(patch_op_to_proto)
+                .collect::<Result<_>>()?,
         }),
         Event::MessagesSnapshot(ev) => PE::MessagesSnapshot(pb::MessagesSnapshotEvent {
             base_event: Some(base_to_proto(&ev.base, pb::EventType::MessagesSnapshot)),
@@ -584,7 +609,11 @@ fn from_proto_event(event: pb::event::Event) -> Result<Event> {
             base: base_from_proto(ev.base_event),
         }),
         PE::StateSnapshot(ev) => Event::StateSnapshot(StateSnapshotEvent {
-            snapshot: ev.snapshot.as_ref().map(proto_to_json).unwrap_or(serde_json::Value::Null),
+            snapshot: ev
+                .snapshot
+                .as_ref()
+                .map(proto_to_json)
+                .unwrap_or(serde_json::Value::Null),
             base: base_from_proto(ev.base_event),
         }),
         PE::StateDelta(ev) => Event::StateDelta(StateDeltaEvent {
@@ -603,13 +632,21 @@ fn from_proto_event(event: pb::event::Event) -> Result<Event> {
             })
         }
         PE::Raw(ev) => Event::Raw(RawEvent {
-            event: ev.event.as_ref().map(proto_to_json).unwrap_or(serde_json::Value::Null),
+            event: ev
+                .event
+                .as_ref()
+                .map(proto_to_json)
+                .unwrap_or(serde_json::Value::Null),
             source: ev.source,
             base: base_from_proto(ev.base_event),
         }),
         PE::Custom(ev) => Event::Custom(CustomEvent {
             name: ev.name,
-            value: ev.value.as_ref().map(proto_to_json).unwrap_or(serde_json::Value::Null),
+            value: ev
+                .value
+                .as_ref()
+                .map(proto_to_json)
+                .unwrap_or(serde_json::Value::Null),
             base: base_from_proto(ev.base_event),
         }),
         PE::RunStarted(ev) => Event::RunStarted(RunStartedEvent {
@@ -622,7 +659,11 @@ fn from_proto_event(event: pb::event::Event) -> Result<Event> {
         PE::RunFinished(ev) => {
             let outcome = match ev.outcome.as_str() {
                 "interrupt" => Some(RunFinishedOutcome::Interrupt {
-                    interrupts: ev.interrupts.into_iter().map(interrupt_from_proto).collect(),
+                    interrupts: ev
+                        .interrupts
+                        .into_iter()
+                        .map(interrupt_from_proto)
+                        .collect(),
                 }),
                 "success" => Some(RunFinishedOutcome::Success),
                 _ => None,

@@ -12,11 +12,9 @@ use agui_rs_client::{
     RunContext,
 };
 use agui_rs_core::types::AssistantMessage;
-use agui_rs_core::{
-    Event, FunctionCall, Message, Result, RunAgentInput, ToolCall, ToolCallKind,
-};
 use agui_rs_core::types::UserMessage;
 use agui_rs_core::UserMessageContent;
+use agui_rs_core::{Event, FunctionCall, Message, Result, RunAgentInput, ToolCall, ToolCallKind};
 use async_trait::async_trait;
 use futures::{stream, stream::BoxStream};
 
@@ -49,10 +47,7 @@ impl RecordingSubscriber {
 
 #[async_trait]
 impl AgentSubscriber for RecordingSubscriber {
-    async fn on_new_message(
-        &self,
-        ctx: &NewMessageContext<'_>,
-    ) -> Result<Option<Message>> {
+    async fn on_new_message(&self, ctx: &NewMessageContext<'_>) -> Result<Option<Message>> {
         self.new_messages
             .lock()
             .unwrap()
@@ -63,10 +58,7 @@ impl AgentSubscriber for RecordingSubscriber {
         Ok(None)
     }
 
-    async fn on_new_tool_call(
-        &self,
-        ctx: &NewToolCallContext<'_>,
-    ) -> Result<Option<ToolCall>> {
+    async fn on_new_tool_call(&self, ctx: &NewToolCallContext<'_>) -> Result<Option<ToolCall>> {
         self.new_tool_calls
             .lock()
             .unwrap()
@@ -128,7 +120,9 @@ async fn add_message_fires_new_message_and_messages_changed() {
     let sub = Arc::new(RecordingSubscriber::default());
     let mut runner = runner_with(sub.clone());
 
-    runner.add_message(user_message("user-msg-1", "Hello world")).await;
+    runner
+        .add_message(user_message("user-msg-1", "Hello world"))
+        .await;
 
     assert_eq!(runner.messages().len(), 1);
     assert_eq!(*sub.new_messages.lock().unwrap(), vec!["user-msg-1"]);
@@ -164,7 +158,10 @@ async fn add_assistant_message_with_tool_calls_fires_new_tool_call_per_call() {
     runner
         .add_message(assistant_with_tool_calls(
             "assistant-msg-2",
-            vec![tool_call("call-1", "get_weather"), tool_call("call-2", "search_web")],
+            vec![
+                tool_call("call-1", "get_weather"),
+                tool_call("call-2", "search_web"),
+            ],
         ))
         .await;
 
@@ -239,7 +236,10 @@ async fn set_state_replaces_and_fires_state_changed_only() {
         .set_state(serde_json::json!({"counter": 100, "isActive": true}))
         .await;
 
-    assert_eq!(runner.state(), &serde_json::json!({"counter": 100, "isActive": true}));
+    assert_eq!(
+        runner.state(),
+        &serde_json::json!({"counter": 100, "isActive": true})
+    );
     assert_eq!(*sub.state_changed.lock().unwrap(), 1);
     assert_eq!(*sub.messages_changed.lock().unwrap(), 0);
     assert!(sub.new_messages.lock().unwrap().is_empty());
@@ -249,8 +249,14 @@ async fn set_state_replaces_and_fires_state_changed_only() {
 async fn notifications_run_in_registration_order() {
     let log = Arc::new(Mutex::new(Vec::new()));
     let mut runner = AgentRunner::new(IdleAgent, AgentConfig::default());
-    runner.subscribe(Arc::new(RecordingSubscriber::with_order("first", log.clone())));
-    runner.subscribe(Arc::new(RecordingSubscriber::with_order("second", log.clone())));
+    runner.subscribe(Arc::new(RecordingSubscriber::with_order(
+        "first",
+        log.clone(),
+    )));
+    runner.subscribe(Arc::new(RecordingSubscriber::with_order(
+        "second",
+        log.clone(),
+    )));
 
     runner.add_message(user_message("test-msg", "Test")).await;
 

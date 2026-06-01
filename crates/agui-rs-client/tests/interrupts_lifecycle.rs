@@ -12,7 +12,7 @@ use std::sync::Mutex;
 
 use agui_rs_client::{AgUiError, Agent, AgentConfig, AgentRunner, RunAgentParameters};
 use agui_rs_core::{
-    factory, BaseEventFields, Event, Interrupt, ResumeEntry, ResumeStatus, Result, RunAgentInput,
+    factory, BaseEventFields, Event, Interrupt, Result, ResumeEntry, ResumeStatus, RunAgentInput,
     RunFinishedEvent, RunFinishedOutcome,
 };
 use async_trait::async_trait;
@@ -228,7 +228,10 @@ async fn rejects_run_when_pending_interrupt_is_expired() {
         Ok(_) => panic!("expired interrupt should reject the run"),
         Err(error) => error,
     };
-    assert!(error.to_string().to_lowercase().contains("expired"), "got: {error}");
+    assert!(
+        error.to_string().to_lowercase().contains("expired"),
+        "got: {error}"
+    );
 }
 
 // IMPLEMENTED: TypeScript AbstractAgent.clone() pendingInterrupts preservation —

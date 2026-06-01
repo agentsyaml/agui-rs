@@ -13,8 +13,8 @@
 
 use agui_rs_core::types::{AssistantMessage, ToolMessage};
 use agui_rs_core::{
-    factory, Event, FunctionCall, Message, MessagesSnapshotEvent, Result, RunAgentInput,
-    ToolCall, ToolCallKind,
+    factory, Event, FunctionCall, Message, MessagesSnapshotEvent, Result, RunAgentInput, ToolCall,
+    ToolCallKind,
 };
 use agui_rs_server::{agui_router, channel, serve, EventEmitter, RunHandler};
 use futures::stream::BoxStream;

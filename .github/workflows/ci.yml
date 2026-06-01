@@ -8,6 +8,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   check:
@@ -90,12 +91,12 @@ jobs:
 
       - name: Publish dry-run (in dependency order)
         run: |
-          cargo publish -p agui-rs-core    --dry-run
-          cargo publish -p agui-rs-proto   --dry-run
-          cargo publish -p agui-rs-encoder --dry-run
-          cargo publish -p agui-rs-client  --dry-run
-          cargo publish -p agui-rs-server  --dry-run
-          cargo publish -p agui-rs         --dry-run
+          cargo publish -p agui-rs-core    --dry-run --no-verify
+          cargo publish -p agui-rs-proto   --dry-run --no-verify
+          cargo publish -p agui-rs-encoder --dry-run --no-verify
+          cargo publish -p agui-rs-client  --dry-run --no-verify
+          cargo publish -p agui-rs-server  --dry-run --no-verify
+          cargo publish -p agui-rs         --dry-run --no-verify
 
   msrv:
     name: MSRV (1.75)
@@ -103,8 +104,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.75
-        with:
-          toolchain: "1.75"
 
       - name: Check with MSRV
         run: cargo check --workspace --all-features

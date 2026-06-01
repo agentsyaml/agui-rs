@@ -118,14 +118,17 @@ impl VerifierState {
                 self.start_tool_call(&event.tool_call_id, event.parent_message_id.as_deref())
             }
             Event::ToolCallArgs(event) => self.tool_call_args(&event.tool_call_id),
-            Event::ToolCallChunk(event) => {
-                self.tool_call_chunk(event.tool_call_id.as_deref(), event.parent_message_id.as_deref())
-            }
+            Event::ToolCallChunk(event) => self.tool_call_chunk(
+                event.tool_call_id.as_deref(),
+                event.parent_message_id.as_deref(),
+            ),
             Event::ToolCallEnd(event) => self.end_tool_call(&event.tool_call_id),
             Event::ReasoningStart(event) => self.start_reasoning(&event.message_id),
             Event::ReasoningMessageStart(event) => self.start_reasoning_message(&event.message_id),
             Event::ReasoningMessageContent(event) => self.reasoning_content(&event.message_id),
-            Event::ReasoningMessageChunk(event) => self.reasoning_chunk(event.message_id.as_deref()),
+            Event::ReasoningMessageChunk(event) => {
+                self.reasoning_chunk(event.message_id.as_deref())
+            }
             Event::ReasoningMessageEnd(event) => self.end_reasoning_message(&event.message_id),
             Event::ReasoningEnd(event) => self.end_reasoning(&event.message_id),
             Event::ThinkingStart(_) => self.start_thinking(),

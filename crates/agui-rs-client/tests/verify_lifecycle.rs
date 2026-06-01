@@ -112,7 +112,10 @@ async fn allows_run_error_after_run_finished() {
     .await;
 
     assert_eq!(out.len(), 5);
-    assert!(out.iter().all(Result::is_ok), "all events should verify: {out:?}");
+    assert!(
+        out.iter().all(Result::is_ok),
+        "all events should verify: {out:?}"
+    );
     assert!(matches!(out[4], Ok(Event::RunError(_))));
 }
 

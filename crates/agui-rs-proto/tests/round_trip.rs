@@ -1,8 +1,8 @@
 //! Round-trip and rejection tests for the protobuf event mapping.
 
 use agui_rs_core::{
-    factory, AgUiError, BaseEventFields, CustomEvent, Event, Interrupt, RawEvent, RunFinishedEvent,
-    RunFinishedOutcome, ReasoningStartEvent,
+    factory, AgUiError, BaseEventFields, CustomEvent, Event, Interrupt, RawEvent,
+    ReasoningStartEvent, RunFinishedEvent, RunFinishedOutcome,
 };
 use serde_json::json;
 

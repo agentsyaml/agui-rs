@@ -47,10 +47,7 @@ struct CountingSubscriber {
 
 #[async_trait]
 impl AgentSubscriber for CountingSubscriber {
-    async fn on_run_started_event(
-        &self,
-        _ctx: &EventContext<'_, RunStartedEvent>,
-    ) -> Result<()> {
+    async fn on_run_started_event(&self, _ctx: &EventContext<'_, RunStartedEvent>) -> Result<()> {
         self.started.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }

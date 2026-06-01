@@ -110,9 +110,9 @@ fn expand_text_chunk(
     }
 
     if !matches!(open, Some(OpenChunk::Text { .. })) {
-        let message_id = chunk
-            .message_id
-            .ok_or_else(|| AgUiError::validation("first TEXT_MESSAGE_CHUNK must include message_id"))?;
+        let message_id = chunk.message_id.ok_or_else(|| {
+            AgUiError::validation("first TEXT_MESSAGE_CHUNK must include message_id")
+        })?;
         *open = Some(OpenChunk::Text {
             message_id: message_id.clone(),
         });
@@ -155,9 +155,9 @@ fn expand_tool_chunk(
     }
 
     if !matches!(open, Some(OpenChunk::Tool { .. })) {
-        let tool_call_id = chunk
-            .tool_call_id
-            .ok_or_else(|| AgUiError::validation("first TOOL_CALL_CHUNK must include tool_call_id"))?;
+        let tool_call_id = chunk.tool_call_id.ok_or_else(|| {
+            AgUiError::validation("first TOOL_CALL_CHUNK must include tool_call_id")
+        })?;
         let tool_call_name = chunk.tool_call_name.ok_or_else(|| {
             AgUiError::validation("first TOOL_CALL_CHUNK must include tool_call_name")
         })?;
@@ -220,11 +220,13 @@ fn expand_reasoning_chunk(
         let Some(OpenChunk::Reasoning { message_id }) = open.as_ref() else {
             unreachable!("reasoning chunk just opened or continued a reasoning message");
         };
-        events.push(Event::ReasoningMessageContent(ReasoningMessageContentEvent {
-            message_id: message_id.clone(),
-            delta,
-            base: BaseEventFields::default(),
-        }));
+        events.push(Event::ReasoningMessageContent(
+            ReasoningMessageContentEvent {
+                message_id: message_id.clone(),
+                delta,
+                base: BaseEventFields::default(),
+            },
+        ));
     }
 
     Ok(events)

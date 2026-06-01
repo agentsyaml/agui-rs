@@ -534,8 +534,11 @@ impl<A: Agent + 'static> AgentRunner<A> {
             }
             CompositeSubscriber::new(list)
         };
-        let subscriber: Option<CompositeSubscriber> =
-            if composite.is_empty() { None } else { Some(composite) };
+        let subscriber: Option<CompositeSubscriber> = if composite.is_empty() {
+            None
+        } else {
+            Some(composite)
+        };
 
         let starting_messages_len = self.messages.len();
         let run_id = params.run_id.clone().unwrap_or_else(|| generate_id("run"));
@@ -594,7 +597,9 @@ impl<A: Agent + 'static> AgentRunner<A> {
             let abort = abort_for_terminal.clone();
             Box::pin(async move {
                 if use_connect {
-                    agent.connect_cancellable(mw_input.run_agent_input, abort).await
+                    agent
+                        .connect_cancellable(mw_input.run_agent_input, abort)
+                        .await
                 } else {
                     agent.run_cancellable(mw_input.run_agent_input, abort).await
                 }

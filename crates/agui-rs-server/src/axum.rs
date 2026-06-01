@@ -11,7 +11,10 @@ use ::axum::{
 use agui_rs_core::RunAgentInput;
 use agui_rs_encoder::{EventEncoder, AGUI_MEDIA_TYPE_PROTOBUF, AGUI_MEDIA_TYPE_SSE};
 
-use crate::{handler::RunHandler, sse::{proto_body, sse_body}};
+use crate::{
+    handler::RunHandler,
+    sse::{proto_body, sse_body},
+};
 
 pub fn agui_router<H: RunHandler>(handler: H) -> Router {
     Router::new().route("/", agui_route(handler))
@@ -84,10 +87,9 @@ async fn run_agent<H: RunHandler>(
 
     let mut response = Response::new(body);
     *response.status_mut() = StatusCode::OK;
-    response.headers_mut().insert(
-        header::CONTENT_TYPE,
-        HeaderValue::from_static(content_type),
-    );
+    response
+        .headers_mut()
+        .insert(header::CONTENT_TYPE, HeaderValue::from_static(content_type));
     response
         .headers_mut()
         .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));

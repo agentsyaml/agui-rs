@@ -5,9 +5,9 @@
 //! batched into one chunk and split across chunks.
 
 use agui_rs_client::{parse_proto_stream, AGUI_MEDIA_TYPE_PROTOBUF};
-use agui_rs_core::{factory, BaseEventFields, Event, MessagesSnapshotEvent, StateDeltaEvent};
 use agui_rs_core::types::AssistantMessage;
 use agui_rs_core::Message;
+use agui_rs_core::{factory, BaseEventFields, Event, MessagesSnapshotEvent, StateDeltaEvent};
 use agui_rs_encoder::EventEncoder;
 use futures::{stream, StreamExt};
 use serde_json::json;

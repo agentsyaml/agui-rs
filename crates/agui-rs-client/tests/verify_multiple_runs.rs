@@ -74,7 +74,10 @@ async fn allows_multiple_sequential_runs() {
     .await;
 
     assert_eq!(out.len(), 10);
-    assert!(out.iter().all(Result::is_ok), "all events should verify: {out:?}");
+    assert!(
+        out.iter().all(Result::is_ok),
+        "all events should verify: {out:?}"
+    );
     assert!(matches!(out[0], Ok(Event::RunStarted(_))));
     assert!(matches!(out[4], Ok(Event::RunFinished(_))));
     assert!(matches!(out[5], Ok(Event::RunStarted(_))));
@@ -96,7 +99,10 @@ async fn allows_reusing_message_ids_across_different_runs() {
     .await;
 
     assert_eq!(out.len(), 8);
-    assert!(out.iter().all(Result::is_ok), "all events should verify: {out:?}");
+    assert!(
+        out.iter().all(Result::is_ok),
+        "all events should verify: {out:?}"
+    );
 }
 
 #[tokio::test]
@@ -116,7 +122,10 @@ async fn allows_multiple_runs_with_tool_calls() {
     .await;
 
     assert_eq!(out.len(), 10);
-    assert!(out.iter().all(Result::is_ok), "all events should verify: {out:?}");
+    assert!(
+        out.iter().all(Result::is_ok),
+        "all events should verify: {out:?}"
+    );
 }
 
 #[tokio::test]
@@ -134,27 +143,39 @@ async fn allows_multiple_runs_with_steps() {
     .await;
 
     assert_eq!(out.len(), 8);
-    assert!(out.iter().all(Result::is_ok), "all events should verify: {out:?}");
+    assert!(
+        out.iter().all(Result::is_ok),
+        "all events should verify: {out:?}"
+    );
 }
 
 #[tokio::test]
 async fn allows_three_sequential_runs() {
     let mut events = Vec::new();
     for i in 1..=3 {
-        events.push(factory::run_started("test-thread-1", format!("test-run-{i}")));
+        events.push(factory::run_started(
+            "test-thread-1",
+            format!("test-run-{i}"),
+        ));
         events.push(factory::text_message_start(format!("msg-{i}")));
         events.push(factory::text_message_content(
             format!("msg-{i}"),
             format!("Message from run {i}"),
         ));
         events.push(factory::text_message_end(format!("msg-{i}")));
-        events.push(factory::run_finished("test-thread-1", format!("test-run-{i}")));
+        events.push(factory::run_finished(
+            "test-thread-1",
+            format!("test-run-{i}"),
+        ));
     }
 
     let out = collect(events).await;
 
     assert_eq!(out.len(), 15);
-    assert!(out.iter().all(Result::is_ok), "all events should verify: {out:?}");
+    assert!(
+        out.iter().all(Result::is_ok),
+        "all events should verify: {out:?}"
+    );
     assert!(matches!(out[0], Ok(Event::RunStarted(_))));
     assert!(matches!(out[5], Ok(Event::RunStarted(_))));
     assert!(matches!(out[10], Ok(Event::RunStarted(_))));
@@ -179,7 +200,10 @@ async fn handles_complex_scenario_with_multiple_runs_and_various_event_types() {
     .await;
 
     assert_eq!(out.len(), 12);
-    assert!(out.iter().all(Result::is_ok), "all events should verify: {out:?}");
+    assert!(
+        out.iter().all(Result::is_ok),
+        "all events should verify: {out:?}"
+    );
     assert!(matches!(out[0], Ok(Event::RunStarted(_))));
     assert!(matches!(out[5], Ok(Event::RunFinished(_))));
     assert!(matches!(out[6], Ok(Event::RunStarted(_))));

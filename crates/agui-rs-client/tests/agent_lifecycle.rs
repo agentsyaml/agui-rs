@@ -84,22 +84,21 @@ async fn cloned_runner_has_independent_message_state() {
     let mut cloned = runner.clone_runner();
 
     // Mutating the clone must not affect the original.
-    cloned
-        .set_state(json!({"stage": "changed"}))
-        .await;
+    cloned.set_state(json!({"stage": "changed"})).await;
 
     assert_eq!(runner.state(), &json!({"stage": "initial"}));
     assert_eq!(cloned.state(), &json!({"stage": "changed"}));
 
     // And vice-versa.
-    runner.add_message(Message::Assistant(AssistantMessage {
-        id: "msg-2".into(),
-        content: Some("only in original".into()),
-        name: None,
-        tool_calls: None,
-        encrypted_value: None,
-    }))
-    .await;
+    runner
+        .add_message(Message::Assistant(AssistantMessage {
+            id: "msg-2".into(),
+            content: Some("only in original".into()),
+            name: None,
+            tool_calls: None,
+            encrypted_value: None,
+        }))
+        .await;
     assert_eq!(runner.messages().len(), 2);
     assert_eq!(cloned.messages().len(), 1);
 }
@@ -111,7 +110,10 @@ async fn connect_agent_uses_connect_stream() {
         .connect_agent(RunAgentParameters::default())
         .await
         .expect("connect should succeed");
-    assert_eq!(result.outcome, Some(agui_rs_core::RunFinishedOutcome::Success));
+    assert_eq!(
+        result.outcome,
+        Some(agui_rs_core::RunFinishedOutcome::Success)
+    );
 }
 
 #[tokio::test]
@@ -156,7 +158,10 @@ async fn debug_config_runs_with_lifecycle_logging_enabled() {
         .run_agent(RunAgentParameters::default())
         .await
         .expect("debug run should succeed");
-    assert_eq!(result.outcome, Some(agui_rs_core::RunFinishedOutcome::Success));
+    assert_eq!(
+        result.outcome,
+        Some(agui_rs_core::RunFinishedOutcome::Success)
+    );
 }
 
 #[tokio::test]
