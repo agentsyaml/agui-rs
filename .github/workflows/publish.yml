@@ -1,0 +1,76 @@
+name: Publish to crates.io
+
+on:
+  push:
+    tags:
+      - "v*"
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Gate: only publish if tests pass on the tagged commit.
+  test:
+    name: Test (publish gate)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Format check
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test --workspace --all-features
+
+  publish:
+    name: Publish to crates.io
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      # Publish in dependency order. Each crate waits for the previous one to
+      # propagate to the crates.io index before the next one depends on it.
+      # `--token` is passed explicitly so the secret never touches disk.
+      - name: Publish agui-rs-core
+        run: cargo publish -p agui-rs-core --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+      - name: Publish agui-rs-proto
+        run: cargo publish -p agui-rs-proto --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+      - name: Publish agui-rs-encoder
+        run: cargo publish -p agui-rs-encoder --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+      - name: Publish agui-rs-client
+        run: cargo publish -p agui-rs-client --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+      - name: Publish agui-rs-server
+        run: cargo publish -p agui-rs-server --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+      - name: Publish agui-rs
+        run: cargo publish -p agui-rs --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
