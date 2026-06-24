@@ -10,7 +10,7 @@ members = [
 ]
 
 [workspace.package]
-version      = "0.1.1"
+version      = "0.1.2"
 edition      = "2021"
 rust-version = "1.75"
 license      = "Apache-2.0"
@@ -23,11 +23,11 @@ authors      = ["agentsyaml"]
 
 [workspace.dependencies]
 # Internal crates (path-resolved within workspace)
-agui-rs-core    = { path = "crates/agui-rs-core",    version = "0.1.1" }
-agui-rs-encoder = { path = "crates/agui-rs-encoder", version = "0.1.1" }
-agui-rs-proto   = { path = "crates/agui-rs-proto",   version = "0.1.1" }
-agui-rs-client  = { path = "crates/agui-rs-client",  version = "0.1.1" }
-agui-rs-server  = { path = "crates/agui-rs-server",  version = "0.1.1" }
+agui-rs-core    = { path = "crates/agui-rs-core",    version = "0.1.2" }
+agui-rs-encoder = { path = "crates/agui-rs-encoder", version = "0.1.2" }
+agui-rs-proto   = { path = "crates/agui-rs-proto",   version = "0.1.2" }
+agui-rs-client  = { path = "crates/agui-rs-client",  version = "0.1.2" }
+agui-rs-server  = { path = "crates/agui-rs-server", version = "0.1.2" }
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }

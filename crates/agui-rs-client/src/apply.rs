@@ -86,13 +86,46 @@ pub fn apply_event(state: &mut ApplyState, event: &Event) -> Result<()> {
         }
         Event::ToolCallEnd(_) => {}
         Event::ToolCallResult(event) => {
-            state.messages.push(Message::Tool(ToolMessage {
+            let tool_message = Message::Tool(ToolMessage {
                 id: event.message_id.clone(),
                 content: event.content.clone(),
                 tool_call_id: event.tool_call_id.clone(),
                 error: None,
                 encrypted_value: None,
-            }));
+            });
+
+            // Place the tool result immediately after the assistant message
+            // that issued the matching tool call, not at the end. A result
+            // event can arrive after a trailing assistant text message (e.g.
+            // a chat -> tool -> chat loop streams the follow-up text before
+            // the result is recorded). Appending would leave the history as
+            // assistant(tool_call) -> text -> tool, which violates the
+            // provider contract that an assistant tool_call is immediately
+            // followed by its tool result. Skip past any tool results already
+            // recorded for the same assistant so parallel results keep their
+            // order. Fall back to append when no owner is found.
+            let owner_index = state.messages.iter().position(|message| {
+                if let Message::Assistant(assistant) = message {
+                    assistant.tool_calls.as_ref().is_some_and(|tool_calls| {
+                        tool_calls.iter().any(|tc| tc.id == event.tool_call_id)
+                    })
+                } else {
+                    false
+                }
+            });
+
+            match owner_index {
+                Some(index) => {
+                    let mut insert_at = index + 1;
+                    while insert_at < state.messages.len()
+                        && matches!(state.messages[insert_at], Message::Tool(_))
+                    {
+                        insert_at += 1;
+                    }
+                    state.messages.insert(insert_at, tool_message);
+                }
+                None => state.messages.push(tool_message),
+            }
         }
         Event::MessagesSnapshot(event) => {
             apply_messages_snapshot(&mut state.messages, &event.messages)
@@ -258,6 +291,17 @@ fn apply_tool_call_start(messages: &mut Vec<Message>, event: &ToolCallStartEvent
 }
 
 fn apply_messages_snapshot(messages: &mut Vec<Message>, snapshot: &[Message]) {
+    // `activity` messages are always client-only (backends never include them
+    // in MESSAGES_SNAPSHOT). `reasoning` is only sometimes client-only: most
+    // backends never include reasoning in the snapshot, so dropping local
+    // reasoning would lose it. But a backend that round-trips reasoning (e.g.
+    // LangGraph re-deriving it from checkpointed content blocks) re-delivers
+    // it under its own canonical id — message ids are generally NOT stable
+    // between streamed events and the snapshot. When the snapshot carries
+    // reasoning, treat it as the source of truth and apply normal replace
+    // semantics so the same reasoning isn't rendered twice.
+    let snapshot_has_reasoning = snapshot.iter().any(|m| matches!(m, Message::Reasoning(_)));
+
     let mut snapshot_map: HashMap<String, Message> = snapshot
         .iter()
         .cloned()
@@ -266,13 +310,13 @@ fn apply_messages_snapshot(messages: &mut Vec<Message>, snapshot: &[Message]) {
     let mut merged = Vec::new();
 
     for message in messages.iter() {
-        match message {
-            Message::Activity(_) | Message::Reasoning(_) => merged.push(message.clone()),
-            _ => {
-                if let Some(snapshot_message) = snapshot_map.remove(message.id()) {
-                    merged.push(snapshot_message);
-                }
-            }
+        let is_preserved_client_only = matches!(message, Message::Activity(_))
+            || (matches!(message, Message::Reasoning(_)) && !snapshot_has_reasoning);
+
+        if is_preserved_client_only {
+            merged.push(message.clone());
+        } else if let Some(snapshot_message) = snapshot_map.remove(message.id()) {
+            merged.push(snapshot_message);
         }
     }
 
@@ -811,6 +855,51 @@ mod tests {
                 _ => panic!("expected tool message"),
             }
         }
+
+        #[tokio::test]
+        async fn places_tool_result_after_owning_assistant_even_with_trailing_text() {
+            let state = apply_all(vec![
+                Event::ToolCallStart(ToolCallStartEvent {
+                    tool_call_id: "tool1".into(),
+                    tool_call_name: "get_weather".into(),
+                    parent_message_id: None,
+                    base: agui_rs_core::BaseEventFields::default(),
+                }),
+                agui_rs_core::factory::tool_call_end("tool1"),
+                Event::TextMessageStart(agui_rs_core::TextMessageStartEvent {
+                    message_id: "text1".into(),
+                    role: TextMessageRole::Assistant,
+                    name: None,
+                    base: agui_rs_core::BaseEventFields::default(),
+                }),
+                agui_rs_core::factory::text_message_content("text1", "Here is the weather."),
+                agui_rs_core::factory::text_message_end("text1"),
+                Event::ToolCallResult(ToolCallResultEvent {
+                    message_id: "res1".into(),
+                    tool_call_id: "tool1".into(),
+                    content: "sunny".into(),
+                    role: Some(ToolResultRole::Tool),
+                    base: agui_rs_core::BaseEventFields::default(),
+                }),
+            ]);
+
+            let roles: Vec<&str> = state.messages.iter().map(role_name).collect();
+            assert_eq!(roles, vec!["assistant", "tool", "assistant"]);
+
+            match &state.messages[0] {
+                Message::Assistant(message) => {
+                    assert!(message
+                        .tool_calls
+                        .as_ref()
+                        .is_some_and(|tcs| { tcs.iter().any(|tc| tc.id == "tool1") }));
+                }
+                _ => panic!("expected assistant with tool call at index 0"),
+            }
+            match &state.messages[1] {
+                Message::Tool(message) => assert_eq!(message.tool_call_id, "tool1"),
+                _ => panic!("expected tool message at index 1"),
+            }
+        }
     }
 
     mod state_patches {
@@ -883,6 +972,318 @@ mod tests {
                 Message::Assistant(message) => assert_eq!(message.content.as_deref(), Some("new")),
                 _ => panic!("expected assistant message"),
             }
+        }
+
+        #[tokio::test]
+        async fn messages_snapshot_replaces_streamed_reasoning_when_snapshot_carries_it() {
+            let mut state = ApplyState {
+                messages: vec![
+                    Message::User(UserMessage {
+                        id: "m1".into(),
+                        content: UserMessageContent::Text("What is the best car to buy?".into()),
+                        name: None,
+                        encrypted_value: None,
+                    }),
+                    Message::Reasoning(ReasoningMessage {
+                        id: "uuid-a".into(),
+                        content: "The user wants a car recommendation.".into(),
+                        encrypted_value: None,
+                    }),
+                    Message::Assistant(AssistantMessage {
+                        id: "lc-1".into(),
+                        content: Some("Based on my analysis.".into()),
+                        name: None,
+                        tool_calls: None,
+                        encrypted_value: None,
+                    }),
+                ],
+                state: Value::Null,
+            };
+
+            apply_event(
+                &mut state,
+                &Event::MessagesSnapshot(MessagesSnapshotEvent {
+                    messages: vec![
+                        Message::User(UserMessage {
+                            id: "m1".into(),
+                            content: UserMessageContent::Text(
+                                "What is the best car to buy?".into(),
+                            ),
+                            name: None,
+                            encrypted_value: None,
+                        }),
+                        Message::Reasoning(ReasoningMessage {
+                            id: "rs-1".into(),
+                            content: "The user wants a car recommendation.".into(),
+                            encrypted_value: None,
+                        }),
+                        Message::Assistant(AssistantMessage {
+                            id: "resp-1".into(),
+                            content: Some("Based on my analysis.".into()),
+                            name: None,
+                            tool_calls: None,
+                            encrypted_value: None,
+                        }),
+                    ],
+                    base: agui_rs_core::BaseEventFields::default(),
+                }),
+            )
+            .expect("snapshot should apply");
+
+            let reasoning_count = state
+                .messages
+                .iter()
+                .filter(|m| matches!(m, Message::Reasoning(_)))
+                .count();
+            assert_eq!(reasoning_count, 1);
+            let ids: Vec<&str> = state.messages.iter().map(|m| m.id()).collect();
+            assert_eq!(ids, vec!["m1", "rs-1", "resp-1"]);
+        }
+
+        #[tokio::test]
+        async fn messages_snapshot_preserves_activity_when_snapshot_carries_reasoning() {
+            let mut state = ApplyState {
+                messages: vec![
+                    Message::User(UserMessage {
+                        id: "m1".into(),
+                        content: UserMessageContent::Text("hello".into()),
+                        name: None,
+                        encrypted_value: None,
+                    }),
+                    Message::Activity(ActivityMessage {
+                        id: "act-1".into(),
+                        activity_type: "PLAN".into(),
+                        content: serde_json::Map::from_iter([(
+                            String::from("tasks"),
+                            json!(["a"]),
+                        )]),
+                    }),
+                    Message::Reasoning(ReasoningMessage {
+                        id: "uuid-a".into(),
+                        content: "thinking".into(),
+                        encrypted_value: None,
+                    }),
+                    Message::Assistant(AssistantMessage {
+                        id: "lc-1".into(),
+                        content: Some("hi".into()),
+                        name: None,
+                        tool_calls: None,
+                        encrypted_value: None,
+                    }),
+                ],
+                state: Value::Null,
+            };
+
+            apply_event(
+                &mut state,
+                &Event::MessagesSnapshot(MessagesSnapshotEvent {
+                    messages: vec![
+                        Message::User(UserMessage {
+                            id: "m1".into(),
+                            content: UserMessageContent::Text("hello".into()),
+                            name: None,
+                            encrypted_value: None,
+                        }),
+                        Message::Reasoning(ReasoningMessage {
+                            id: "rs-1".into(),
+                            content: "thinking".into(),
+                            encrypted_value: None,
+                        }),
+                        Message::Assistant(AssistantMessage {
+                            id: "resp-1".into(),
+                            content: Some("hi".into()),
+                            name: None,
+                            tool_calls: None,
+                            encrypted_value: None,
+                        }),
+                    ],
+                    base: agui_rs_core::BaseEventFields::default(),
+                }),
+            )
+            .expect("snapshot should apply");
+
+            let activity_count = state
+                .messages
+                .iter()
+                .filter(|m| matches!(m, Message::Activity(_)))
+                .count();
+            assert_eq!(activity_count, 1);
+            let reasoning_count = state
+                .messages
+                .iter()
+                .filter(|m| matches!(m, Message::Reasoning(_)))
+                .count();
+            assert_eq!(reasoning_count, 1);
+            let ids: Vec<&str> = state.messages.iter().map(|m| m.id()).collect();
+            assert_eq!(ids, vec!["m1", "act-1", "rs-1", "resp-1"]);
+        }
+
+        #[tokio::test]
+        async fn messages_snapshot_updates_id_stable_reasoning_with_snapshot_version() {
+            let mut state = ApplyState {
+                messages: vec![
+                    Message::User(UserMessage {
+                        id: "m1".into(),
+                        content: UserMessageContent::Text("hello".into()),
+                        name: None,
+                        encrypted_value: None,
+                    }),
+                    Message::Reasoning(ReasoningMessage {
+                        id: "r1".into(),
+                        content: "thinking".into(),
+                        encrypted_value: None,
+                    }),
+                    Message::Assistant(AssistantMessage {
+                        id: "a1".into(),
+                        content: Some("hi".into()),
+                        name: None,
+                        tool_calls: None,
+                        encrypted_value: None,
+                    }),
+                ],
+                state: Value::Null,
+            };
+
+            apply_event(
+                &mut state,
+                &Event::MessagesSnapshot(MessagesSnapshotEvent {
+                    messages: vec![
+                        Message::User(UserMessage {
+                            id: "m1".into(),
+                            content: UserMessageContent::Text("hello".into()),
+                            name: None,
+                            encrypted_value: None,
+                        }),
+                        Message::Reasoning(ReasoningMessage {
+                            id: "r1".into(),
+                            content: "thinking".into(),
+                            encrypted_value: Some("enc-1".into()),
+                        }),
+                        Message::Assistant(AssistantMessage {
+                            id: "a1".into(),
+                            content: Some("hi".into()),
+                            name: None,
+                            tool_calls: None,
+                            encrypted_value: None,
+                        }),
+                    ],
+                    base: agui_rs_core::BaseEventFields::default(),
+                }),
+            )
+            .expect("snapshot should apply");
+
+            let reasoning_count = state
+                .messages
+                .iter()
+                .filter(|m| matches!(m, Message::Reasoning(_)))
+                .count();
+            assert_eq!(reasoning_count, 1);
+            match &state.messages[1] {
+                Message::Reasoning(message) => {
+                    assert_eq!(message.encrypted_value.as_deref(), Some("enc-1"));
+                }
+                _ => panic!("expected reasoning message at index 1"),
+            }
+        }
+
+        #[tokio::test]
+        async fn messages_snapshot_converges_multi_turn_reasoning() {
+            let mut state = ApplyState {
+                messages: vec![
+                    Message::User(UserMessage {
+                        id: "u1".into(),
+                        content: UserMessageContent::Text("q1".into()),
+                        name: None,
+                        encrypted_value: None,
+                    }),
+                    Message::Reasoning(ReasoningMessage {
+                        id: "rs-1".into(),
+                        content: "thinking about q1".into(),
+                        encrypted_value: None,
+                    }),
+                    Message::Assistant(AssistantMessage {
+                        id: "resp-1".into(),
+                        content: Some("a1".into()),
+                        name: None,
+                        tool_calls: None,
+                        encrypted_value: None,
+                    }),
+                    Message::User(UserMessage {
+                        id: "u2".into(),
+                        content: UserMessageContent::Text("q2".into()),
+                        name: None,
+                        encrypted_value: None,
+                    }),
+                    Message::Reasoning(ReasoningMessage {
+                        id: "uuid-b".into(),
+                        content: "thinking about q2".into(),
+                        encrypted_value: None,
+                    }),
+                    Message::Assistant(AssistantMessage {
+                        id: "lc-2".into(),
+                        content: Some("a2".into()),
+                        name: None,
+                        tool_calls: None,
+                        encrypted_value: None,
+                    }),
+                ],
+                state: Value::Null,
+            };
+
+            apply_event(
+                &mut state,
+                &Event::MessagesSnapshot(MessagesSnapshotEvent {
+                    messages: vec![
+                        Message::User(UserMessage {
+                            id: "u1".into(),
+                            content: UserMessageContent::Text("q1".into()),
+                            name: None,
+                            encrypted_value: None,
+                        }),
+                        Message::Reasoning(ReasoningMessage {
+                            id: "rs-1".into(),
+                            content: "thinking about q1".into(),
+                            encrypted_value: None,
+                        }),
+                        Message::Assistant(AssistantMessage {
+                            id: "resp-1".into(),
+                            content: Some("a1".into()),
+                            name: None,
+                            tool_calls: None,
+                            encrypted_value: None,
+                        }),
+                        Message::User(UserMessage {
+                            id: "u2".into(),
+                            content: UserMessageContent::Text("q2".into()),
+                            name: None,
+                            encrypted_value: None,
+                        }),
+                        Message::Reasoning(ReasoningMessage {
+                            id: "rs-2".into(),
+                            content: "thinking about q2".into(),
+                            encrypted_value: None,
+                        }),
+                        Message::Assistant(AssistantMessage {
+                            id: "resp-2".into(),
+                            content: Some("a2".into()),
+                            name: None,
+                            tool_calls: None,
+                            encrypted_value: None,
+                        }),
+                    ],
+                    base: agui_rs_core::BaseEventFields::default(),
+                }),
+            )
+            .expect("snapshot should apply");
+
+            let reasoning_count = state
+                .messages
+                .iter()
+                .filter(|m| matches!(m, Message::Reasoning(_)))
+                .count();
+            assert_eq!(reasoning_count, 2);
+            let ids: Vec<&str> = state.messages.iter().map(|m| m.id()).collect();
+            assert_eq!(ids, vec!["u1", "rs-1", "resp-1", "u2", "rs-2", "resp-2"]);
         }
 
         #[tokio::test]

@@ -4,7 +4,7 @@ version = 3
 
 [[package]]
 name = "agui-rs"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "agui-rs-client",
  "agui-rs-core",
@@ -15,7 +15,7 @@ dependencies = [
 
 [[package]]
 name = "agui-rs-client"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "agui-rs-core",
  "agui-rs-encoder",
@@ -40,7 +40,7 @@ dependencies = [
 
 [[package]]
 name = "agui-rs-core"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -50,7 +50,7 @@ dependencies = [
 
 [[package]]
 name = "agui-rs-encoder"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "agui-rs-core",
  "agui-rs-proto",
@@ -60,7 +60,7 @@ dependencies = [
 
 [[package]]
 name = "agui-rs-proto"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "agui-rs-core",
  "prost",
@@ -70,7 +70,7 @@ dependencies = [
 
 [[package]]
 name = "agui-rs-server"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "agui-rs-core",
  "agui-rs-encoder",

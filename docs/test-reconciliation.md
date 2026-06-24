@@ -1,8 +1,8 @@
 # TS ⇄ Rust Test Reconciliation
 
 A per-file, per-case reconciliation of the canonical TypeScript test suite
-(`sdks/typescript/packages/{core,client,encoder}` at `0.0.54`, commit
-`f30021b9`) against this SDK's tests. The goal is to make "are these really all
+(`sdks/typescript/packages/{core,client,encoder}` at `0.0.57`, commit
+`54f1341`) against this SDK's tests. The goal is to make "are these really all
 the gaps?" **verifiable** rather than asserted.
 
 Method: enumerate every TS `it()/test()` case per file and map each TS test file
@@ -12,7 +12,7 @@ below the TS count is then inspected case-by-case and classified below.
 
 - TS packages in scope: **core, client, encoder** (`proto`, `a2ui-toolkit`,
   `cli` are out of scope — `proto` is the stubbed protobuf impl).
-- TS cases in scope: **568**. Rust ported: **499**. Rust SKIPPED markers: **76**.
+- TS cases in scope: **574**. Rust ported: **504**. Rust SKIPPED markers: **76**.
 - Last refreshed: 2026-05-30 (after closing capabilities, verify multi-run,
   compact state-compaction, multi-subscriber registry, and agent mutator gaps).
 

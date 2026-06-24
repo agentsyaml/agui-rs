@@ -24,9 +24,9 @@ are layered on top without diverging from that contract.
 
 | Tracked upstream | Value |
 | ---------------- | ----- |
-| TypeScript SDK packages | `@ag-ui/core` / `@ag-ui/client` / `@ag-ui/encoder` **0.0.54** |
-| Monorepo commit | `f30021b9` (2026-05-29) |
-| Reviewed | 2026-05-30 |
+| TypeScript SDK packages | `@ag-ui/core` / `@ag-ui/client` / `@ag-ui/encoder` **0.0.57** |
+| Monorepo commit | `54f1341` (2026-06-12) |
+| Reviewed | 2026-06-24 |
 | Examples baseline | `integrations/server-starter-all-features` |
 
 Full field-by-field audit: **[`docs/typescript-alignment.md`](docs/typescript-alignment.md)**.

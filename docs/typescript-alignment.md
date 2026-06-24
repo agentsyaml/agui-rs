@@ -6,14 +6,14 @@
 
 > Per-file, per-case test reconciliation: see
 > [`test-reconciliation.md`](test-reconciliation.md) for the verifiable mapping
-> of all 568 TS cases to Rust ported/skipped coverage.
+> of all 574 TS cases to Rust ported/skipped coverage.
 
 | Tracked             | Value                                                         |
 | ------------------- | ------------------------------------------------------------- |
-| TS package versions | `@ag-ui/core` / `@ag-ui/client` / `@ag-ui/encoder` **0.0.54** |
-| Monorepo commit     | `f30021b9dddb97f827f463ab36bddd34ac6bb764` (2026-05-29)       |
+| TS package versions | `@ag-ui/core` / `@ag-ui/client` / `@ag-ui/encoder` **0.0.57** |
+| Monorepo commit     | `54f13419055b4d0f442c71e1efab18b310982ce1` (2026-06-12)       |
 | Local checkout      | `../ag-ui`                                                    |
-| Audited             | 2026-05-30                                                    |
+| Audited             | 2026-06-24                                                    |
 
 This SDK aligns all protocol types, events, wire format, and runtime behaviour
 to that reference. Rust-specific ergonomics are layered on top **without

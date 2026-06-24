@@ -15,9 +15,39 @@ are layered on top without diverging from that contract.
 
 | Tracked upstream | Value |
 | ---------------- | ----- |
-| TypeScript SDK packages | `@ag-ui/core`, `@ag-ui/client`, `@ag-ui/encoder` `0.0.54` |
-| Monorepo commit | `f30021b9dddb97f827f463ab36bddd34ac6bb764` (2026-05-29) |
-| Reviewed | 2026-05-30 |
+| TypeScript SDK packages | `@ag-ui/core`, `@ag-ui/client`, `@ag-ui/encoder` `0.0.57` |
+| Monorepo commit | `54f13419055b4d0f442c71e1efab18b310982ce1` (2026-06-12) |
+| Reviewed | 2026-06-24 |
+
+## [0.1.2] - 2026-06-24
+
+### Fixed (faithfulness, 2026-06-24)
+- **Synced upstream TS SDK 0.0.54 → 0.0.57.** Two client-side bug fixes ported
+  from the TypeScript SDK; core/encoder/proto packages had zero code changes.
+- **Tool-result ordering in event reducer.** When a `TOOL_CALL_RESULT` event
+  arrives, the tool message is now inserted immediately after the owning
+  assistant message (the one whose `tool_calls[].id` matches `tool_call_id`),
+  skipping past any existing tool results for that assistant. Previously the
+  tool message was appended to the end of `state.messages`, which could place
+  it after trailing assistant text and violate the provider's message-ordering
+  contract (tool result must immediately follow the assistant message that
+  issued the tool call). Falls back to append when no owning assistant is
+  found. Ported from TS commit `89a0c03` (0.0.55).
+- **`MESSAGES_SNAPSHOT` reasoning dedup.** When a snapshot carries reasoning
+  messages, streamed reasoning (with locally-generated ids) is now replaced by
+  the snapshot's canonical copy instead of being preserved alongside it.
+  Activity messages are always preserved. Local reasoning is preserved only
+  when the snapshot does not contain reasoning. Ported from TS commit
+  `5d9d1f2` (0.0.57).
+- **5 new tests** mirroring the upstream TS test cases: tool-result ordering
+  with trailing text, reasoning replacement, activity preservation, same-id
+  reasoning update, and multi-turn reasoning convergence.
+
+### Not ported (intentional)
+- `0dc4c55` (0.0.57): HttpAgent default fetch binding — browser-only, N/A.
+- `e395af5` + `748ad8c` (0.0.56): subscriber clone-cost / payloadExceeds /
+  dev freeze guard — JS/browser-specific; Rust's ownership model and trait-based
+  `AgentSubscriber` architecture already prevent these issues.
 
 ## [0.1.1] - 2026-05-31
 
