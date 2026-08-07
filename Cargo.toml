@@ -22,7 +22,16 @@ categories   = ["api-bindings", "asynchronous"]
 authors      = ["agentsyaml"]
 
 [workspace.dependencies]
-# Internal crates (path-resolved within workspace)
+# Internal crates (path-resolved within workspace).
+# IMPORTANT: keep these versions pinned to the LAST PUBLISHED crates.io
+# release, not the current workspace version. `cargo publish --dry-run`
+# (CI "Publish dry-run" job) resolves internal dependencies against the
+# crates.io index, which only contains published versions — bumping these
+# in lockstep with `[workspace.package] version` makes the CI dry-run fail
+# with "failed to select a version" until the new versions are actually
+# published. Real publishing (workflow `publish.yml`) runs in dependency
+# order, so a fresh `^x.y.z` requirement resolves to the just-published
+# crate; bump these after (or never — caret semantics keep them compatible).
 agui-rs-core    = { path = "crates/agui-rs-core",    version = "0.1.3" }
 agui-rs-encoder = { path = "crates/agui-rs-encoder", version = "0.1.3" }
 agui-rs-proto   = { path = "crates/agui-rs-proto",   version = "0.1.3" }
