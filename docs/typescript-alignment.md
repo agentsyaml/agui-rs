@@ -11,9 +11,9 @@
 | Tracked             | Value                                                         |
 | ------------------- | ------------------------------------------------------------- |
 | TS package versions | `@ag-ui/core` / `@ag-ui/client` / `@ag-ui/encoder` **0.0.57** |
-| Monorepo commit     | `54f13419055b4d0f442c71e1efab18b310982ce1` (2026-06-12)       |
+| Monorepo commit     | `27e5593a8ba4e372ec009f17ca61b76715d356c4` (2026-08-07)       |
 | Local checkout      | `../ag-ui`                                                    |
-| Audited             | 2026-06-24                                                    |
+| Audited             | 2026-08-07                                                    |
 
 This SDK aligns all protocol types, events, wire format, and runtime behaviour
 to that reference. Rust-specific ergonomics are layered on top **without

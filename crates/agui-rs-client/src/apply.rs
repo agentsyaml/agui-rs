@@ -261,45 +261,82 @@ fn append_reasoning_content(message: &mut Message, delta: &str) -> Result<()> {
 }
 
 fn apply_tool_call_start(messages: &mut Vec<Message>, event: &ToolCallStartEvent) -> Result<()> {
+    // Applying a start must be idempotent: the same start can reach the
+    // reducer twice — a tool call already carried in `messages` from an
+    // earlier run and replayed after a HITL `respond()` re-sync, or one
+    // stream delivered over two transports. Dedupe across ALL messages
+    // BEFORE resolving the parent, so a replay can't append a second entry
+    // or a stray empty assistant message (its `parentMessageId` may no
+    // longer be in state). Leave `arguments` untouched — a start carries
+    // none, and the copy already in state holds the streamed args.
+    let mut existing = None;
+    'search: for message in messages.iter_mut() {
+        if let Message::Assistant(assistant) = message {
+            if let Some(tool_calls) = assistant.tool_calls.as_mut() {
+                for tool_call in tool_calls.iter_mut() {
+                    if tool_call.id == event.tool_call_id {
+                        existing = Some(tool_call);
+                        break 'search;
+                    }
+                }
+            }
+        }
+    }
+
+    if let Some(tool_call) = existing {
+        if tool_call.function.name != event.tool_call_name {
+            tracing::warn!(
+                tool_call_id = %event.tool_call_id,
+                "TOOL_CALL_START: tool call already exists — updating name to '{}'",
+                event.tool_call_name
+            );
+            tool_call.function.name = event.tool_call_name.clone();
+        }
+        return Ok(());
+    }
+
     let index = resolve_or_create_assistant_message(
         messages,
         event.parent_message_id.as_deref(),
         &event.tool_call_id,
     );
     let assistant = assistant_message_mut(&mut messages[index])?;
-    let tool_calls = assistant.tool_calls.get_or_insert_with(Vec::new);
-
-    if let Some(tool_call) = tool_calls
-        .iter_mut()
-        .find(|tool_call| tool_call.id == event.tool_call_id)
-    {
-        tool_call.function.name = event.tool_call_name.clone();
-        return Ok(());
-    }
-
-    tool_calls.push(ToolCall {
-        id: event.tool_call_id.clone(),
-        kind: ToolCallKind::Function,
-        function: FunctionCall {
-            name: event.tool_call_name.clone(),
-            arguments: String::new(),
-        },
-        encrypted_value: None,
-    });
+    assistant
+        .tool_calls
+        .get_or_insert_with(Vec::new)
+        .push(ToolCall {
+            id: event.tool_call_id.clone(),
+            kind: ToolCallKind::Function,
+            function: FunctionCall {
+                name: event.tool_call_name.clone(),
+                arguments: String::new(),
+            },
+            encrypted_value: None,
+        });
 
     Ok(())
 }
 
 fn apply_messages_snapshot(messages: &mut Vec<Message>, snapshot: &[Message]) {
-    // `activity` messages are always client-only (backends never include them
-    // in MESSAGES_SNAPSHOT). `reasoning` is only sometimes client-only: most
-    // backends never include reasoning in the snapshot, so dropping local
-    // reasoning would lose it. But a backend that round-trips reasoning (e.g.
-    // LangGraph re-deriving it from checkpointed content blocks) re-delivers
-    // it under its own canonical id — message ids are generally NOT stable
-    // between streamed events and the snapshot. When the snapshot carries
-    // reasoning, treat it as the source of truth and apply normal replace
-    // semantics so the same reasoning isn't rendered twice.
+    // `activity` messages are only sometimes client-only. They never travel
+    // back to the backend, so a backend that does not track them cannot put
+    // them in the snapshot, and the local copies must be preserved. But a
+    // backend that does track them re-delivers the whole set it owns. A
+    // MESSAGES_SNAPSHOT is a snapshot of every message, so once it carries
+    // any activity the backend is declaring the complete activity set, and
+    // one it leaves out has been removed — preserving it would make the
+    // local copy undeletable. So when the snapshot carries activity, treat
+    // it as the source of truth and apply the normal replace semantics.
+    //
+    // `reasoning` is only sometimes client-only: most backends never include
+    // reasoning in the snapshot, so dropping local reasoning would lose it.
+    // But a backend that round-trips reasoning (e.g. LangGraph re-deriving
+    // it from checkpointed content blocks) re-delivers it under its own
+    // canonical id — message ids are generally NOT stable between streamed
+    // events and the snapshot. When the snapshot carries reasoning, treat it
+    // as the source of truth and apply normal replace semantics so the same
+    // reasoning isn't rendered twice.
+    let snapshot_has_activity = snapshot.iter().any(|m| matches!(m, Message::Activity(_)));
     let snapshot_has_reasoning = snapshot.iter().any(|m| matches!(m, Message::Reasoning(_)));
 
     let mut snapshot_map: HashMap<String, Message> = snapshot
@@ -310,7 +347,8 @@ fn apply_messages_snapshot(messages: &mut Vec<Message>, snapshot: &[Message]) {
     let mut merged = Vec::new();
 
     for message in messages.iter() {
-        let is_preserved_client_only = matches!(message, Message::Activity(_))
+        let is_preserved_client_only = (matches!(message, Message::Activity(_))
+            && !snapshot_has_activity)
             || (matches!(message, Message::Reasoning(_)) && !snapshot_has_reasoning);
 
         if is_preserved_client_only {
@@ -900,6 +938,161 @@ mod tests {
                 _ => panic!("expected tool message at index 1"),
             }
         }
+
+        fn start_event(
+            tool_call_id: &str,
+            tool_call_name: &str,
+            parent_message_id: Option<&str>,
+        ) -> Event {
+            Event::ToolCallStart(ToolCallStartEvent {
+                tool_call_id: tool_call_id.into(),
+                tool_call_name: tool_call_name.into(),
+                parent_message_id: parent_message_id.map(Into::into),
+                base: agui_rs_core::BaseEventFields::default(),
+            })
+        }
+
+        // The assistant message an interrupted run leaves behind: the tool call
+        // is already in the message list with its arguments fully streamed
+        // before the next run starts (TS: `carriedOverAssistant`).
+        fn carried_over_assistant() -> Message {
+            Message::Assistant(AssistantMessage {
+                id: "msg-1".into(),
+                content: None,
+                name: None,
+                tool_calls: Some(vec![ToolCall {
+                    id: "tc-1".into(),
+                    kind: ToolCallKind::Function,
+                    function: FunctionCall {
+                        name: "openPolicyException".into(),
+                        arguments: "{\"txId\":\"t-9\"}".into(),
+                    },
+                    encrypted_value: None,
+                }]),
+                encrypted_value: None,
+            })
+        }
+
+        #[tokio::test]
+        async fn duplicate_tool_call_start_does_not_append_second_entry() {
+            // The exact same event reaching the reducer twice — a run re-sync
+            // replaying it, or one stream delivered over two transports.
+            let state = apply_all(vec![
+                start_event("tc-1", "search", Some("msg-1")),
+                start_event("tc-1", "search", Some("msg-1")),
+                agui_rs_core::factory::tool_call_args("tc-1", "{\"query\":\"x\"}"),
+                agui_rs_core::factory::tool_call_end("tc-1"),
+            ]);
+
+            assert_eq!(state.messages.len(), 1);
+            let Message::Assistant(message) = &state.messages[0] else {
+                panic!("expected assistant message");
+            };
+            let tool_calls = message.tool_calls.as_ref().expect("tool calls");
+            assert_eq!(tool_calls.len(), 1);
+            assert_eq!(tool_calls[0].id, "tc-1");
+            // The single surviving copy carries the arguments — without the
+            // guard the deltas resolve to the first match and the second copy
+            // stays empty.
+            assert_eq!(tool_calls[0].function.arguments, "{\"query\":\"x\"}");
+        }
+
+        #[tokio::test]
+        async fn replayed_start_for_carried_over_tool_call_preserves_arguments() {
+            let mut state = ApplyState {
+                messages: vec![carried_over_assistant()],
+                state: Value::Null,
+            };
+
+            apply_event(
+                &mut state,
+                &start_event("tc-1", "openPolicyException", Some("msg-1")),
+            )
+            .expect("replayed start applies");
+            apply_event(
+                &mut state,
+                &Event::ToolCallResult(ToolCallResultEvent {
+                    message_id: "tm-1".into(),
+                    tool_call_id: "tc-1".into(),
+                    content: "approved".into(),
+                    role: Some(ToolResultRole::Tool),
+                    base: agui_rs_core::BaseEventFields::default(),
+                }),
+            )
+            .expect("result applies");
+
+            assert_eq!(state.messages.len(), 2);
+            let Message::Assistant(message) = &state.messages[0] else {
+                panic!("expected assistant message");
+            };
+            assert_eq!(message.id, "msg-1");
+            let tool_calls = message.tool_calls.as_ref().expect("tool calls");
+            assert_eq!(tool_calls.len(), 1);
+            // Arguments streamed on the previous run survive — a start event
+            // carries none, so overwriting them would blank the call out.
+            assert_eq!(tool_calls[0].function.arguments, "{\"txId\":\"t-9\"}");
+        }
+
+        #[tokio::test]
+        async fn replayed_start_with_unknown_parent_creates_no_stray_assistant() {
+            // The dedupe has to run before the parent is resolved: a replay
+            // whose parentMessageId is no longer in state would otherwise
+            // create a fresh assistant message to hang the duplicate off.
+            let mut state = ApplyState {
+                messages: vec![carried_over_assistant()],
+                state: Value::Null,
+            };
+
+            apply_event(
+                &mut state,
+                &start_event("tc-1", "openPolicyException", Some("msg-regenerated")),
+            )
+            .expect("replayed start applies");
+            apply_event(
+                &mut state,
+                &Event::ToolCallResult(ToolCallResultEvent {
+                    message_id: "tm-1".into(),
+                    tool_call_id: "tc-1".into(),
+                    content: "approved".into(),
+                    role: Some(ToolResultRole::Tool),
+                    base: agui_rs_core::BaseEventFields::default(),
+                }),
+            )
+            .expect("result applies");
+
+            let ids: Vec<&str> = state.messages.iter().map(|m| m.id()).collect();
+            assert_eq!(ids, vec!["msg-1", "tm-1"]);
+            let assistants: Vec<_> = state
+                .messages
+                .iter()
+                .filter(|m| matches!(m, Message::Assistant(_)))
+                .collect();
+            assert_eq!(assistants.len(), 1);
+            let Message::Assistant(assistant) = assistants[0] else {
+                unreachable!();
+            };
+            assert_eq!(assistant.tool_calls.as_ref().expect("tool calls").len(), 1);
+        }
+
+        #[tokio::test]
+        async fn replayed_start_with_different_name_updates_in_place() {
+            // A start reusing an id under a different name updates the existing
+            // entry in place and leaves the streamed arguments untouched.
+            let state = apply_all(vec![
+                start_event("tc-1", "search", None),
+                agui_rs_core::factory::tool_call_args("tc-1", "{\"query\":\"x\"}"),
+                start_event("tc-1", "lookup", None),
+            ]);
+
+            assert_eq!(state.messages.len(), 1);
+            let Message::Assistant(message) = &state.messages[0] else {
+                panic!("expected assistant message");
+            };
+            let tool_calls = message.tool_calls.as_ref().expect("tool calls");
+            assert_eq!(tool_calls.len(), 1);
+            assert_eq!(tool_calls[0].function.name, "lookup");
+            assert_eq!(tool_calls[0].function.arguments, "{\"query\":\"x\"}");
+        }
     }
 
     mod state_patches {
@@ -1116,6 +1309,203 @@ mod tests {
             assert_eq!(reasoning_count, 1);
             let ids: Vec<&str> = state.messages.iter().map(|m| m.id()).collect();
             assert_eq!(ids, vec!["m1", "act-1", "rs-1", "resp-1"]);
+        }
+
+        fn activity(id: &str, tasks: &[&str]) -> Message {
+            Message::Activity(ActivityMessage {
+                id: id.into(),
+                activity_type: "PLAN".into(),
+                content: serde_json::Map::from_iter([(String::from("tasks"), json!(tasks))]),
+            })
+        }
+
+        fn snapshot(messages: Vec<Message>) -> Event {
+            Event::MessagesSnapshot(MessagesSnapshotEvent {
+                messages,
+                base: agui_rs_core::BaseEventFields::default(),
+            })
+        }
+
+        #[tokio::test]
+        async fn messages_snapshot_replaces_activity_with_snapshot_version() {
+            let mut state = ApplyState {
+                messages: vec![
+                    Message::User(UserMessage {
+                        id: "m1".into(),
+                        content: UserMessageContent::Text("hello".into()),
+                        name: None,
+                        encrypted_value: None,
+                    }),
+                    activity("act-1", &["stale"]),
+                    Message::Assistant(AssistantMessage {
+                        id: "a1".into(),
+                        content: Some("hi".into()),
+                        name: None,
+                        tool_calls: None,
+                        encrypted_value: None,
+                    }),
+                ],
+                state: Value::Null,
+            };
+
+            apply_event(
+                &mut state,
+                &snapshot(vec![
+                    Message::User(UserMessage {
+                        id: "m1".into(),
+                        content: UserMessageContent::Text("hello".into()),
+                        name: None,
+                        encrypted_value: None,
+                    }),
+                    activity("act-1", &["fresh"]),
+                    Message::Assistant(AssistantMessage {
+                        id: "a1".into(),
+                        content: Some("hi".into()),
+                        name: None,
+                        tool_calls: None,
+                        encrypted_value: None,
+                    }),
+                ]),
+            )
+            .expect("snapshot should apply");
+
+            let activity_count = state
+                .messages
+                .iter()
+                .filter(|m| matches!(m, Message::Activity(_)))
+                .count();
+            assert_eq!(activity_count, 1);
+            let ids: Vec<&str> = state.messages.iter().map(|m| m.id()).collect();
+            assert_eq!(ids, vec!["m1", "act-1", "a1"]);
+            let Message::Activity(message) = &state.messages[1] else {
+                panic!("expected activity message");
+            };
+            assert_eq!(message.content.get("tasks"), Some(&json!(["fresh"])));
+        }
+
+        #[tokio::test]
+        async fn messages_snapshot_appends_activity_client_does_not_have() {
+            let mut state = ApplyState {
+                messages: vec![Message::User(UserMessage {
+                    id: "m1".into(),
+                    content: UserMessageContent::Text("hello".into()),
+                    name: None,
+                    encrypted_value: None,
+                })],
+                state: Value::Null,
+            };
+
+            apply_event(
+                &mut state,
+                &snapshot(vec![
+                    Message::User(UserMessage {
+                        id: "m1".into(),
+                        content: UserMessageContent::Text("hello".into()),
+                        name: None,
+                        encrypted_value: None,
+                    }),
+                    activity("act-1", &["fresh"]),
+                ]),
+            )
+            .expect("snapshot should apply");
+
+            let ids: Vec<&str> = state.messages.iter().map(|m| m.id()).collect();
+            assert_eq!(ids, vec!["m1", "act-1"]);
+            let Message::Activity(message) = &state.messages[1] else {
+                panic!("expected activity message");
+            };
+            assert_eq!(message.content.get("tasks"), Some(&json!(["fresh"])));
+        }
+
+        #[tokio::test]
+        async fn messages_snapshot_drops_activity_it_leaves_out_when_it_carries_activity() {
+            // A snapshot carrying any activity declares the complete activity
+            // set: entries it repeats are replaced, ones it leaves out are
+            // removed — preserving them would make the local copy undeletable.
+            let mut state = ApplyState {
+                messages: vec![
+                    Message::User(UserMessage {
+                        id: "m1".into(),
+                        content: UserMessageContent::Text("hello".into()),
+                        name: None,
+                        encrypted_value: None,
+                    }),
+                    activity("act-gone", &["gone"]),
+                    activity("act-1", &["stale"]),
+                ],
+                state: Value::Null,
+            };
+
+            apply_event(
+                &mut state,
+                &snapshot(vec![
+                    Message::User(UserMessage {
+                        id: "m1".into(),
+                        content: UserMessageContent::Text("hello".into()),
+                        name: None,
+                        encrypted_value: None,
+                    }),
+                    activity("act-1", &["fresh"]),
+                ]),
+            )
+            .expect("snapshot should apply");
+
+            let ids: Vec<&str> = state.messages.iter().map(|m| m.id()).collect();
+            assert_eq!(ids, vec!["m1", "act-1"]);
+            let Message::Activity(message) = &state.messages[1] else {
+                panic!("expected activity message");
+            };
+            assert_eq!(message.content.get("tasks"), Some(&json!(["fresh"])));
+        }
+
+        #[tokio::test]
+        async fn messages_snapshot_keeps_activity_when_it_carries_none() {
+            let mut state = ApplyState {
+                messages: vec![
+                    Message::User(UserMessage {
+                        id: "m1".into(),
+                        content: UserMessageContent::Text("hello".into()),
+                        name: None,
+                        encrypted_value: None,
+                    }),
+                    activity("act-1", &["local"]),
+                    Message::Assistant(AssistantMessage {
+                        id: "a1".into(),
+                        content: Some("hi".into()),
+                        name: None,
+                        tool_calls: None,
+                        encrypted_value: None,
+                    }),
+                ],
+                state: Value::Null,
+            };
+
+            apply_event(
+                &mut state,
+                &snapshot(vec![
+                    Message::User(UserMessage {
+                        id: "m1".into(),
+                        content: UserMessageContent::Text("hello".into()),
+                        name: None,
+                        encrypted_value: None,
+                    }),
+                    Message::Assistant(AssistantMessage {
+                        id: "a1".into(),
+                        content: Some("hi".into()),
+                        name: None,
+                        tool_calls: None,
+                        encrypted_value: None,
+                    }),
+                ]),
+            )
+            .expect("snapshot should apply");
+
+            let ids: Vec<&str> = state.messages.iter().map(|m| m.id()).collect();
+            assert_eq!(ids, vec!["m1", "act-1", "a1"]);
+            let Message::Activity(message) = &state.messages[1] else {
+                panic!("expected activity message");
+            };
+            assert_eq!(message.content.get("tasks"), Some(&json!(["local"])));
         }
 
         #[tokio::test]

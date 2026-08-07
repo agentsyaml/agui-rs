@@ -660,6 +660,37 @@ mod tests {
     }
 
     #[test]
+    fn tool_call_parent_message_id_accepts_null() {
+        // Cross-language back-compat (TS 0.0.58+ main, commit 2fa33a0e): the
+        // .NET Microsoft Agent Framework adapter serializes the optional
+        // `parentMessageId` as JSON `null` rather than omitting it. `Option`
+        // fields must treat null as "field omitted", not fail validation.
+        for json in [
+            json!({"type": "TOOL_CALL_START", "toolCallId": "tc-1", "toolCallName": "get_weather", "parentMessageId": null}),
+            json!({"type": "TOOL_CALL_CHUNK", "toolCallId": "tc-1", "toolCallName": "get_weather", "parentMessageId": null, "delta": "x"}),
+        ] {
+            let event: Event =
+                serde_json::from_value(json).expect("null parentMessageId should parse");
+            match &event {
+                Event::ToolCallStart(e) => assert!(e.parent_message_id.is_none()),
+                Event::ToolCallChunk(e) => assert!(e.parent_message_id.is_none()),
+                _ => panic!("unexpected event: {event:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn tool_call_parent_message_id_round_trips_string() {
+        let json = json!({"type": "TOOL_CALL_START", "toolCallId": "tc-1", "toolCallName": "get_weather", "parentMessageId": "msg-1"});
+        let event: Event =
+            serde_json::from_value(json).expect("string parentMessageId should parse");
+        match &event {
+            Event::ToolCallStart(e) => assert_eq!(e.parent_message_id.as_deref(), Some("msg-1")),
+            _ => panic!("unexpected event: {event:?}"),
+        }
+    }
+
+    #[test]
     fn tool_call_result_round_trip() {
         let event = Event::ToolCallResult(ToolCallResultEvent {
             message_id: "m1".into(),

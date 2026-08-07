@@ -143,7 +143,8 @@ fn content_part_to_proto(part: &InputContent) -> Option<pb::InputContent> {
                         },
                     )),
                 }
-            } else if let Some(url) = content.url.as_ref().or(content.id.as_ref()) {
+            } else {
+                let url = content.url.as_ref().or(content.id.as_ref())?;
                 pb::InputContentSource {
                     source: Some(pb::input_content_source::Source::Url(
                         pb::InputContentUrlSource {
@@ -152,8 +153,6 @@ fn content_part_to_proto(part: &InputContent) -> Option<pb::InputContent> {
                         },
                     )),
                 }
-            } else {
-                return None;
             };
             let mut meta = serde_json::Map::new();
             meta.insert("legacyBinary".into(), serde_json::Value::Bool(true));

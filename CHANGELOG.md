@@ -16,8 +16,38 @@ are layered on top without diverging from that contract.
 | Tracked upstream | Value |
 | ---------------- | ----- |
 | TypeScript SDK packages | `@ag-ui/core`, `@ag-ui/client`, `@ag-ui/encoder` `0.0.57` |
-| Monorepo commit | `54f13419055b4d0f442c71e1efab18b310982ce1` (2026-06-12) |
-| Reviewed | 2026-06-24 |
+| Monorepo commit | `27e5593a8ba4e372ec009f17ca61b76715d356c4` (2026-08-07) |
+| Reviewed | 2026-08-07 |
+
+## [0.1.3] - 2026-08-07
+
+### Fixed (faithfulness, 2026-08-07)
+- **Synced upstream monorepo `54f1341` → `27e5593a`.** No new stable npm
+  release (still `0.0.57`); three client-side/core fixes ported from TS SDK
+  main. Proto packages changed only by C#-only `csharp_namespace` options
+  (no wire-format impact; not ported).
+- **`TOOL_CALL_START` idempotency.** Applying a start event is now
+  idempotent: the reducer dedupes the tool call id across all messages
+  *before* resolving/creating the parent assistant message, so a replayed
+  start (HITL `respond()` re-sync or dual-transport delivery) can no longer
+  append a duplicate tool call or a stray empty assistant message when its
+  `parentMessageId` is no longer in state. A start reusing an id under a
+  different name updates the existing entry in place (`tracing::warn!`,
+  mirroring TS `console.warn`) and never touches already-streamed
+  `arguments`. Ported from TS commit `d6287260`.
+- **`MESSAGES_SNAPSHOT` activity all-or-nothing.** When a snapshot carries
+  any activity message, the backend is declaring the complete activity set:
+  activity messages now follow the same source-of-truth replace semantics as
+  reasoning (repeated entries replaced, omitted local entries dropped).
+  Activity stays client-preserved only when the snapshot carries none.
+  Ported from TS commits `ad24f70b` + `388e4c59`.
+- **`parentMessageId: null` accepted on `TOOL_CALL_START`/`TOOL_CALL_CHUNK`.**
+  Cross-language back-compat: producers that serialize the optional field as
+  JSON `null` (e.g. the .NET Microsoft Agent Framework adapter) validate
+  instead of aborting the run. Rust `Option` fields already normalize `null`
+  to `None`; behaviour locked with tests. Ported from TS commit `2fa33a0e`.
+- **10 new tests** mirroring the upstream TS cases: 4 tool-call idempotency,
+  4 snapshot-activity, 2 core null-`parentMessageId` acceptance tests.
 
 ## [0.1.2] - 2026-06-24
 
