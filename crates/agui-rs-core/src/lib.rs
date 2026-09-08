@@ -24,6 +24,8 @@ pub use capabilities::{
     TransportCapabilities,
 };
 pub use error::{AgUiError, Result};
+// legacy: THINKING_* is upstream-deprecated but still re-exported for old streams.
+#[allow(deprecated)]
 pub use events::{
     factory, ActivityDeltaEvent, ActivitySnapshotEvent, BaseEventFields, CustomEvent, Event,
     EventType, MessagesSnapshotEvent, RawEvent, ReasoningEncryptedValueEvent,
@@ -31,9 +33,10 @@ pub use events::{
     ReasoningMessageContentEvent, ReasoningMessageEndEvent, ReasoningMessageRole,
     ReasoningMessageStartEvent, ReasoningStartEvent, RunErrorEvent, RunFinishedEvent,
     RunFinishedOutcome, RunStartedEvent, StateDeltaEvent, StateSnapshotEvent, StepFinishedEvent,
-    StepStartedEvent, TextMessageChunkEvent, TextMessageContentEvent, TextMessageEndEvent,
+    StepStartedEvent, SubagentErrorEvent, SubagentFinishedEvent, SubagentFinishedOutcome,
+    SubagentStartedEvent, TextMessageChunkEvent, TextMessageContentEvent, TextMessageEndEvent,
     TextMessageStartEvent, ThinkingEndEvent, ThinkingStartEvent, ThinkingTextMessageContentEvent,
-    ThinkingTextMessageEndEvent, ThinkingTextMessageStartEvent, ToolCallArgsEvent,
+    ThinkingTextMessageEndEvent, ThinkingTextMessageStartEvent, TokenUsage, ToolCallArgsEvent,
     ToolCallChunkEvent, ToolCallEndEvent, ToolCallResultEvent, ToolCallStartEvent, ToolResultRole,
 };
 pub use types::{

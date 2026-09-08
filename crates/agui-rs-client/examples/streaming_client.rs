@@ -51,6 +51,7 @@ async fn main() -> agui_rs_core::Result<()> {
         headers: Default::default(),
         agent: agent_cfg.clone(),
         request_executor: None,
+        accept_protobuf: false,
     });
 
     let mut runner = AgentRunner::new(agent, agent_cfg).with_subscriber(Arc::new(PrintSubscriber));

@@ -21,7 +21,7 @@ mod transform;
 mod verify;
 
 pub use agent::{
-    Agent, AgentConfig, AgentRunner, RunAgentParameters, RunAgentResult, Subscription,
+    AbortHandle, Agent, AgentConfig, AgentRunner, RunAgentParameters, RunAgentResult, Subscription,
 };
 pub use apply::{default_apply_events, AppliedEvent};
 pub use chunks::expand_chunks;

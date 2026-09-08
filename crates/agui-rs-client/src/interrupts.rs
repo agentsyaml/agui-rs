@@ -244,6 +244,7 @@ mod tests {
             outcome: Some(RunFinishedOutcome::Interrupt {
                 interrupts: interrupts.clone(),
             }),
+            usage: Vec::new(),
             base: BaseEventFields::default(),
         });
 
@@ -259,6 +260,7 @@ mod tests {
             get_run_outcome(&[Event::RunError(RunErrorEvent {
                 message: "boom".into(),
                 code: Some("E_BOOM".into()),
+                usage: Vec::new(),
                 base: BaseEventFields::default(),
             })]),
             RunOutcome::Error {
@@ -274,6 +276,7 @@ mod tests {
             Event::RunError(RunErrorEvent {
                 message: "boom".into(),
                 code: None,
+                usage: Vec::new(),
                 base: BaseEventFields::default(),
             }),
             factory::run_finished("t1", "r1"),
@@ -302,6 +305,7 @@ mod tests {
             outcome: Some(RunFinishedOutcome::Interrupt {
                 interrupts: vec![interrupt("i1", Some("2026-04-22T12:00:00Z"))],
             }),
+            usage: Vec::new(),
             base: BaseEventFields::default(),
         });
 

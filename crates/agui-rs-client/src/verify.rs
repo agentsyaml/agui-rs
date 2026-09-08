@@ -59,6 +59,8 @@ impl VerifierState {
         self.clear_active_state();
     }
 
+    // legacy: THINKING_* is upstream-deprecated but must still pass through for old streams.
+    #[allow(deprecated)]
     fn validate_event(&mut self, event: &Event) -> VerifyResult<()> {
         // RUN_ERROR is permanently terminal: nothing (not even a new run) may
         // follow it.
@@ -138,6 +140,12 @@ impl VerifierState {
             Event::ThinkingEnd(_) => self.end_thinking(),
             Event::StepStarted(event) => self.start_step(&event.step_name),
             Event::StepFinished(event) => self.finish_step(&event.step_name),
+            // ponytail: subagent events are pass-through (outcome/interruptIds
+            // attribution already enforced by core types); ordering follows the
+            // run terminal rules above.
+            Event::SubagentStarted(_) | Event::SubagentFinished(_) | Event::SubagentError(_) => {
+                Ok(())
+            }
             _ => Ok(()),
         }
     }
@@ -541,6 +549,8 @@ impl VerifierState {
     }
 }
 
+// legacy: THINKING_* is upstream-deprecated but must still pass through for old streams.
+#[allow(deprecated)]
 fn event_name(event: &Event) -> &'static str {
     match event {
         Event::TextMessageStart(_) => "TEXT_MESSAGE_START",
@@ -576,10 +586,15 @@ fn event_name(event: &Event) -> &'static str {
         Event::ThinkingTextMessageStart(_) => "THINKING_TEXT_MESSAGE_START",
         Event::ThinkingTextMessageContent(_) => "THINKING_TEXT_MESSAGE_CONTENT",
         Event::ThinkingTextMessageEnd(_) => "THINKING_TEXT_MESSAGE_END",
+        Event::SubagentStarted(_) => "SUBAGENT_STARTED",
+        Event::SubagentFinished(_) => "SUBAGENT_FINISHED",
+        Event::SubagentError(_) => "SUBAGENT_ERROR",
     }
 }
 
 #[cfg(test)]
+// legacy: THINKING_* is upstream-deprecated but must still pass through for old streams.
+#[allow(deprecated)]
 mod tests {
     use super::*;
     use agui_rs_core::{

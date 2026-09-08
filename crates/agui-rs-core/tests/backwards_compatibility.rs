@@ -1,3 +1,6 @@
+// legacy: THINKING_* is upstream-deprecated but must still pass through for old streams.
+#![allow(deprecated)]
+
 use agui_rs_core::types::{Message, RunAgentInput};
 use agui_rs_core::{Context, Event, Tool};
 use serde_json::json;
@@ -104,7 +107,8 @@ fn text_message_start_event_accepts_extra_fields() {
     let serialized = serde_json::to_value(event).expect("serialize text message start event");
     assert_eq!(serialized["type"], "TEXT_MESSAGE_START");
     assert_eq!(serialized["messageId"], "msg_1");
-    assert!(serialized.get("metadata").is_none());
+    // metadata is now a first-class passthrough field on every event.
+    assert_eq!(serialized["metadata"], json!({ "tokenCount": 10 }));
     assert!(serialized.get("experimentalFeature").is_none());
 }
 

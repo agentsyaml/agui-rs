@@ -93,6 +93,7 @@ async fn captures_state_after_each_expanded_event() {
                     run_id: input.run_agent_input.run_id,
                     result: Some(serde_json::json!({"success": true})),
                     outcome: Some(RunFinishedOutcome::Success),
+                    usage: Vec::new(),
                     base: BaseEventFields::default(),
                 })),
             ])) as middleware::EventStream)

@@ -237,6 +237,7 @@ where
                     yield Event::RunError(RunErrorEvent {
                         message: event.message,
                         code: event.code,
+                        usage: Vec::new(),
                         base: BaseEventFields::default(),
                     });
                 }

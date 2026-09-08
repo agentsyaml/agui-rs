@@ -196,6 +196,7 @@ async fn should_retain_activity_messages_across_runs() {
                 run_id: "run-1".into(),
                 result: None,
                 outcome: Some(RunFinishedOutcome::Success),
+                usage: Vec::new(),
                 base: BaseEventFields::default(),
             }),
         ],

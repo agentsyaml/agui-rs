@@ -182,6 +182,9 @@ pub enum EventType {
     RunError = 13,
     StepStarted = 14,
     StepFinished = 15,
+    SubagentStarted = 16,
+    SubagentFinished = 17,
+    SubagentError = 18,
 }
 
 #[derive(Clone, PartialEq, Message)]
@@ -192,6 +195,9 @@ pub struct BaseEvent {
     pub timestamp: Option<i64>,
     #[prost(message, optional, tag = "3")]
     pub raw_event: Option<ProtoValue>,
+    #[prost(message, optional, tag = "4")]
+    pub metadata: Option<ProtoValue>,
+    // reserved 5 (removed subagent_run_id — never reuse).
 }
 
 #[derive(Clone, PartialEq, Message)]
@@ -306,6 +312,25 @@ pub struct RunStartedEvent {
     pub thread_id: String,
     #[prost(string, tag = "3")]
     pub run_id: String,
+    // reserved 4, 5 (removed parent_run_id/input — never reuse).
+}
+
+#[derive(Clone, PartialEq, Message)]
+pub struct Usage {
+    #[prost(string, optional, tag = "1")]
+    pub provider: Option<String>,
+    #[prost(string, optional, tag = "2")]
+    pub model: Option<String>,
+    #[prost(uint64, optional, tag = "3")]
+    pub input_tokens: Option<u64>,
+    #[prost(uint64, optional, tag = "4")]
+    pub output_tokens: Option<u64>,
+    #[prost(uint64, optional, tag = "5")]
+    pub total_tokens: Option<u64>,
+    #[prost(uint64, optional, tag = "6")]
+    pub reasoning_tokens: Option<u64>,
+    #[prost(uint64, optional, tag = "7")]
+    pub cached_input_tokens: Option<u64>,
 }
 
 #[derive(Clone, PartialEq, Message)]
@@ -322,6 +347,8 @@ pub struct RunFinishedEvent {
     pub outcome: String,
     #[prost(message, repeated, tag = "6")]
     pub interrupts: Vec<Interrupt>,
+    #[prost(message, repeated, tag = "7")]
+    pub usage: Vec<Usage>,
 }
 
 #[derive(Clone, PartialEq, Message)]
@@ -332,6 +359,8 @@ pub struct RunErrorEvent {
     pub code: Option<String>,
     #[prost(string, tag = "3")]
     pub message: String,
+    #[prost(message, repeated, tag = "4")]
+    pub usage: Vec<Usage>,
 }
 
 #[derive(Clone, PartialEq, Message)]
@@ -379,10 +408,57 @@ pub struct ToolCallChunkEvent {
 }
 
 #[derive(Clone, PartialEq, Message)]
+pub struct SubagentStartedEvent {
+    #[prost(message, optional, tag = "1")]
+    pub base_event: Option<BaseEvent>,
+    #[prost(string, tag = "2")]
+    pub subagent_run_id: String,
+    #[prost(string, tag = "3")]
+    pub name: String,
+    #[prost(string, optional, tag = "4")]
+    pub description: Option<String>,
+    #[prost(string, optional, tag = "5")]
+    pub parent_subagent_run_id: Option<String>,
+    #[prost(string, optional, tag = "6")]
+    pub parent_tool_call_id: Option<String>,
+    #[prost(string, optional, tag = "7")]
+    pub parent_message_id: Option<String>,
+}
+
+#[derive(Clone, PartialEq, Message)]
+pub struct SubagentFinishedEvent {
+    #[prost(message, optional, tag = "1")]
+    pub base_event: Option<BaseEvent>,
+    #[prost(string, tag = "2")]
+    pub subagent_run_id: String,
+    #[prost(message, optional, tag = "3")]
+    pub result: Option<ProtoValue>,
+    // Flattened outcome: "success" | "suspended" | "" (absent).
+    #[prost(string, tag = "4")]
+    pub outcome: String,
+    #[prost(string, repeated, tag = "5")]
+    pub interrupt_ids: Vec<String>,
+    // reserved 6 (old top-level ids slot — never reuse).
+}
+
+#[derive(Clone, PartialEq, Message)]
+pub struct SubagentErrorEvent {
+    #[prost(message, optional, tag = "1")]
+    pub base_event: Option<BaseEvent>,
+    #[prost(string, tag = "2")]
+    pub subagent_run_id: String,
+    #[prost(string, tag = "3")]
+    pub message: String,
+    #[prost(string, optional, tag = "4")]
+    pub code: Option<String>,
+    // reserved 5, 6 (old lineage/message slots — never reuse).
+}
+
+#[derive(Clone, PartialEq, Message)]
 pub struct Event {
     #[prost(
         oneof = "event::Event",
-        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18"
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21"
     )]
     pub event: Option<event::Event>,
 }
@@ -427,5 +503,11 @@ pub mod event {
         TextMessageChunk(TextMessageChunkEvent),
         #[prost(message, tag = "18")]
         ToolCallChunk(ToolCallChunkEvent),
+        #[prost(message, tag = "19")]
+        SubagentStarted(SubagentStartedEvent),
+        #[prost(message, tag = "20")]
+        SubagentFinished(SubagentFinishedEvent),
+        #[prost(message, tag = "21")]
+        SubagentError(SubagentErrorEvent),
     }
 }

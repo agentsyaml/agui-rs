@@ -7,6 +7,7 @@ async fn main() -> agui_rs_core::Result<()> {
         headers: Default::default(),
         agent: AgentConfig::default(),
         request_executor: None,
+        accept_protobuf: false,
     });
 
     let mut runner = AgentRunner::new(agent, AgentConfig::default());

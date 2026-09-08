@@ -96,6 +96,7 @@ async fn middleware_can_modify_the_event_stream() {
                 run_id: "test-run".into(),
                 result: Some(json!({"success": true})),
                 outcome: Some(RunFinishedOutcome::Success),
+                usage: Vec::new(),
                 base: BaseEventFields::default(),
             }),
         ],

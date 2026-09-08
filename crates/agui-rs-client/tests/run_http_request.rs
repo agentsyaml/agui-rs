@@ -21,6 +21,7 @@ fn http_agent(url: String, headers: HashMap<String, String>) -> HttpAgent {
         headers,
         agent: AgentConfig::default(),
         request_executor: None,
+        accept_protobuf: false,
     })
 }
 

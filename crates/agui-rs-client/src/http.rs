@@ -1,6 +1,7 @@
 use crate::agent::{abortable_event_stream, AbortHandle, Agent, AgentConfig, EventStream};
 use crate::transform::{
-    detect_stream_format, parse_proto_stream, parse_sse_stream, StreamFormat, AGUI_MEDIA_TYPE_SSE,
+    detect_stream_format, parse_proto_stream, parse_sse_stream, StreamFormat,
+    AGUI_MEDIA_TYPE_PROTOBUF, AGUI_MEDIA_TYPE_SSE,
 };
 use agui_rs_core::{AgUiError, Event, Result, RunAgentInput};
 use async_trait::async_trait;
@@ -17,12 +18,15 @@ pub type HttpRequestExecutor = Arc<
         + Sync,
 >;
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct HttpAgentConfig {
     pub url: String,
     pub headers: HashMap<String, String>,
     pub agent: AgentConfig,
     pub request_executor: Option<HttpRequestExecutor>,
+    /// Request protobuf binary instead of SSE. Defaults to `false` (SSE);
+    /// response decoding still follows `detect_stream_format`.
+    pub accept_protobuf: bool,
 }
 
 impl fmt::Debug for HttpAgentConfig {
@@ -31,6 +35,7 @@ impl fmt::Debug for HttpAgentConfig {
             .field("url", &self.url)
             .field("headers", &self.headers)
             .field("agent", &self.agent)
+            .field("accept_protobuf", &self.accept_protobuf)
             .field(
                 "request_executor",
                 &self.request_executor.as_ref().map(|_| "<custom>"),
@@ -72,7 +77,14 @@ impl Agent for HttpAgent {
         let mut request = self
             .client
             .post(&self.config.url)
-            .header(ACCEPT, AGUI_MEDIA_TYPE_SSE)
+            .header(
+                ACCEPT,
+                if self.config.accept_protobuf {
+                    AGUI_MEDIA_TYPE_PROTOBUF
+                } else {
+                    AGUI_MEDIA_TYPE_SSE
+                },
+            )
             .json(&input);
         for (key, value) in &self.config.headers {
             request = request.header(key, value);
@@ -232,6 +244,7 @@ mod abort_tests {
             headers: Default::default(),
             agent: AgentConfig::default(),
             request_executor: None,
+            accept_protobuf: false,
         })
     }
 

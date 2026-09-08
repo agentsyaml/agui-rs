@@ -1,7 +1,8 @@
 //! Protobuf binary encoding for AG-UI events.
 //!
 //! Mirrors the canonical TypeScript `@ag-ui/proto` package: encodes/decodes the
-//! 16 base event variants plus the two chunk variants defined in `events.proto`.
+//! 16 base event variants plus the two chunk variants and the three subagent
+//! variants defined in `events.proto`.
 //! Reasoning / activity / thinking events are **not** part of the protobuf
 //! schema upstream and are rejected by [`encode`] with [`AgUiError::Unsupported`].
 //!

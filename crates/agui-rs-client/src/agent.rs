@@ -179,6 +179,7 @@ pub struct AgentRunner<A: Agent + 'static> {
     pending_interrupts: Vec<Interrupt>,
     now_fn: Arc<dyn Fn() -> String + Send + Sync>,
     debug_logger: Option<crate::debug_logger::DebugLogger>,
+    verify: bool,
 }
 
 /// Handle returned by [`AgentRunner::subscribe`].
@@ -230,6 +231,7 @@ impl<A: Agent + 'static> AgentRunner<A> {
             pending_interrupts: Vec::new(),
             now_fn: Arc::new(default_now),
             debug_logger,
+            verify: true,
         }
     }
 
@@ -282,6 +284,7 @@ impl<A: Agent + 'static> AgentRunner<A> {
             pending_interrupts: self.pending_interrupts.clone(),
             now_fn: self.now_fn.clone(),
             debug_logger: self.debug_logger.clone(),
+            verify: self.verify,
         }
     }
 
@@ -330,6 +333,13 @@ impl<A: Agent + 'static> AgentRunner<A> {
         F: Fn() -> String + Send + Sync + 'static,
     {
         self.now_fn = Arc::new(now_fn);
+        self
+    }
+
+    /// Toggles `verify_events` in the run pipeline. Defaults to `true`;
+    /// set `false` to bypass ordering verification (apply still runs).
+    pub fn with_verify(mut self, verify: bool) -> Self {
+        self.verify = verify;
         self
     }
 
@@ -554,6 +564,7 @@ impl<A: Agent + 'static> AgentRunner<A> {
         let input = RunAgentInput {
             thread_id: self.thread_id.clone(),
             run_id: run_id.clone(),
+            // ponytail: upstream prepareRunAgentInput drops parentRunId.
             parent_run_id: None,
             state: self.state.clone(),
             messages: self.messages.clone(),
@@ -635,11 +646,14 @@ impl<A: Agent + 'static> AgentRunner<A> {
             }
         };
 
-        let pipeline = default_apply_events(
-            verify_events(expand_chunks(raw_stream)),
-            self.messages.clone(),
-            self.state.clone(),
-        );
+        let expanded = expand_chunks(raw_stream);
+        // ponytail: verify is bypassable; default on, behavior unchanged.
+        let checked: EventStream = if self.verify {
+            verify_events(expanded).boxed()
+        } else {
+            expanded
+        };
+        let pipeline = default_apply_events(checked, self.messages.clone(), self.state.clone());
         let mut pipeline = pipeline.boxed();
         let mut outcome = None;
         let mut announced_tool_call_ids = HashSet::new();
@@ -1056,12 +1070,16 @@ impl<A: Agent + 'static> AgentRunner<A> {
                             }
                         ));
                     }
+                    // legacy: THINKING_* is upstream-deprecated but must still pass through for old streams.
+                    #[allow(deprecated)]
                     Event::ThinkingStart(event) => {
                         try_subscriber_hook!(subscriber.on_thinking_start(&EventContext {
                             run: &context,
                             event,
                         }));
                     }
+                    // legacy: THINKING_* is upstream-deprecated but must still pass through for old streams.
+                    #[allow(deprecated)]
                     Event::ThinkingEnd(event) => {
                         try_subscriber_hook!(subscriber.on_thinking_end(&EventContext {
                             run: &context,
@@ -1120,9 +1138,15 @@ impl<A: Agent + 'static> AgentRunner<A> {
                             event,
                         }));
                     }
+                    // legacy: THINKING_* is upstream-deprecated but must still pass through for old streams.
+                    #[allow(deprecated)]
                     Event::ThinkingTextMessageStart(_)
                     | Event::ThinkingTextMessageContent(_)
-                    | Event::ThinkingTextMessageEnd(_) => {}
+                    | Event::ThinkingTextMessageEnd(_)
+                    // ponytail: subagent events have no subscriber projection yet.
+                    | Event::SubagentStarted(_)
+                    | Event::SubagentFinished(_)
+                    | Event::SubagentError(_) => {}
                 }
 
                 if previous_messages != context.messages {
@@ -1520,6 +1544,7 @@ mod tests {
                     run_id: "run-1".into(),
                     result: None,
                     outcome: Some(RunFinishedOutcome::Success),
+                    usage: Vec::new(),
                     base: BaseEventFields::default(),
                 }),
             ],
@@ -1564,6 +1589,7 @@ mod tests {
                     run_id: "run-1".into(),
                     result: None,
                     outcome: Some(RunFinishedOutcome::Success),
+                    usage: Vec::new(),
                     base: BaseEventFields::default(),
                 }),
             ],
@@ -1596,6 +1622,7 @@ mod tests {
                     run_id: "run-1".into(),
                     result: None,
                     outcome: Some(RunFinishedOutcome::Success),
+                    usage: Vec::new(),
                     base: BaseEventFields::default(),
                 }),
             ],
@@ -1628,6 +1655,7 @@ mod tests {
                     run_id: "run-1".into(),
                     result: None,
                     outcome: Some(RunFinishedOutcome::Success),
+                    usage: Vec::new(),
                     base: BaseEventFields::default(),
                 }),
             ],

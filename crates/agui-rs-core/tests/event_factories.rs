@@ -1,3 +1,6 @@
+// legacy: THINKING_* is upstream-deprecated but must still pass through for old streams.
+#![allow(deprecated)]
+
 use agui_rs_core::event_factories as factory;
 use agui_rs_core::types::{Interrupt, Message, RunAgentInput};
 use agui_rs_core::{

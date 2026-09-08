@@ -37,6 +37,7 @@ async fn run_filter(middleware: FilterToolCallsMiddleware) -> Vec<Event> {
         run_id: "test-run".into(),
         result: None,
         outcome: None,
+        usage: Vec::new(),
         base: BaseEventFields::default(),
     }));
 

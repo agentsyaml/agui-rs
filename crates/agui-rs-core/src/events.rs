@@ -1,6 +1,15 @@
 use crate::types::{Interrupt, Message, RunAgentInput, State, TextMessageRole};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
+
+// ponytail: null -> default so old streams with explicit null don't fail.
+fn null_as_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Default + Deserialize<'de>,
+{
+    Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
+}
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct BaseEventFields {
@@ -8,6 +17,8 @@ pub struct BaseEventFields {
     pub timestamp: Option<i64>,
     #[serde(rename = "rawEvent", skip_serializing_if = "Option::is_none", default)]
     pub raw_event: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub metadata: Option<Value>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -48,11 +59,20 @@ pub enum EventType {
     ReasoningEnd,
     ReasoningEncryptedValue,
 
+    #[deprecated(note = "use REASONING_* instead")]
     ThinkingStart,
+    #[deprecated(note = "use REASONING_* instead")]
     ThinkingEnd,
+    #[deprecated(note = "use REASONING_* instead")]
     ThinkingTextMessageStart,
+    #[deprecated(note = "use REASONING_* instead")]
     ThinkingTextMessageContent,
+    #[deprecated(note = "use REASONING_* instead")]
     ThinkingTextMessageEnd,
+
+    SubagentStarted,
+    SubagentFinished,
+    SubagentError,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -249,6 +269,25 @@ pub enum RunFinishedOutcome {
     Interrupt { interrupts: Vec<Interrupt> },
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TokenUsage {
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub provider: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub input_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub output_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub total_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub reasoning_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub cached_input_tokens: Option<u64>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RunFinishedEvent {
@@ -258,6 +297,12 @@ pub struct RunFinishedEvent {
     pub result: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub outcome: Option<RunFinishedOutcome>,
+    #[serde(
+        default,
+        deserialize_with = "null_as_default",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub usage: Vec<TokenUsage>,
     #[serde(flatten)]
     pub base: BaseEventFields,
 }
@@ -268,6 +313,12 @@ pub struct RunErrorEvent {
     pub message: String,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub code: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "null_as_default",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub usage: Vec<TokenUsage>,
     #[serde(flatten)]
     pub base: BaseEventFields,
 }
@@ -366,6 +417,7 @@ pub struct ReasoningEncryptedValueEvent {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[deprecated(note = "use REASONING_* instead")]
 pub struct ThinkingStartEvent {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub title: Option<String>,
@@ -375,6 +427,7 @@ pub struct ThinkingStartEvent {
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[deprecated(note = "use REASONING_* instead")]
 pub struct ThinkingEndEvent {
     #[serde(flatten)]
     pub base: BaseEventFields,
@@ -382,6 +435,7 @@ pub struct ThinkingEndEvent {
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[deprecated(note = "use REASONING_* instead")]
 pub struct ThinkingTextMessageStartEvent {
     #[serde(flatten)]
     pub base: BaseEventFields,
@@ -389,6 +443,7 @@ pub struct ThinkingTextMessageStartEvent {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[deprecated(note = "use REASONING_* instead")]
 pub struct ThinkingTextMessageContentEvent {
     pub delta: String,
     #[serde(flatten)]
@@ -397,7 +452,65 @@ pub struct ThinkingTextMessageContentEvent {
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[deprecated(note = "use REASONING_* instead")]
 pub struct ThinkingTextMessageEndEvent {
+    #[serde(flatten)]
+    pub base: BaseEventFields,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "lowercase")]
+pub enum SubagentFinishedOutcome {
+    Success,
+    Suspended {
+        #[serde(
+            rename = "interruptIds",
+            default,
+            deserialize_with = "null_as_default",
+            skip_serializing_if = "Vec::is_empty"
+        )]
+        interrupt_ids: Vec<String>,
+    },
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubagentStartedEvent {
+    pub subagent_run_id: String,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub parent_subagent_run_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub parent_tool_call_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub parent_message_id: Option<String>,
+    #[serde(flatten)]
+    pub base: BaseEventFields,
+}
+
+/// `interrupt_ids` live only nested inside `outcome.suspended`; there is no
+/// top-level ids field.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubagentFinishedEvent {
+    pub subagent_run_id: String,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub result: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub outcome: Option<SubagentFinishedOutcome>,
+    #[serde(flatten)]
+    pub base: BaseEventFields,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubagentErrorEvent {
+    pub subagent_run_id: String,
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub code: Option<String>,
     #[serde(flatten)]
     pub base: BaseEventFields,
 }
@@ -440,11 +553,26 @@ pub enum Event {
     ReasoningEnd(ReasoningEndEvent),
     ReasoningEncryptedValue(ReasoningEncryptedValueEvent),
 
+    // legacy: THINKING_* is upstream-deprecated but must still pass through for old streams.
+    #[allow(deprecated)]
+    #[deprecated(note = "use REASONING_* instead")]
     ThinkingStart(ThinkingStartEvent),
+    #[allow(deprecated)]
+    #[deprecated(note = "use REASONING_* instead")]
     ThinkingEnd(ThinkingEndEvent),
+    #[allow(deprecated)]
+    #[deprecated(note = "use REASONING_* instead")]
     ThinkingTextMessageStart(ThinkingTextMessageStartEvent),
+    #[allow(deprecated)]
+    #[deprecated(note = "use REASONING_* instead")]
     ThinkingTextMessageContent(ThinkingTextMessageContentEvent),
+    #[allow(deprecated)]
+    #[deprecated(note = "use REASONING_* instead")]
     ThinkingTextMessageEnd(ThinkingTextMessageEndEvent),
+
+    SubagentStarted(SubagentStartedEvent),
+    SubagentFinished(SubagentFinishedEvent),
+    SubagentError(SubagentErrorEvent),
 }
 
 /// Generates [`Event::event_type`] and [`Event::base`] from a single variant
@@ -453,6 +581,7 @@ macro_rules! impl_event_dispatch {
     ($($variant:ident),+ $(,)?) => {
         impl Event {
             /// Returns the [`EventType`] discriminant for this event.
+            #[allow(deprecated)]
             pub fn event_type(&self) -> EventType {
                 match self {
                     $(Self::$variant(_) => EventType::$variant,)+
@@ -460,6 +589,7 @@ macro_rules! impl_event_dispatch {
             }
 
             /// Returns the shared [`BaseEventFields`] carried by every event.
+            #[allow(deprecated)]
             pub fn base(&self) -> &BaseEventFields {
                 match self {
                     $(Self::$variant(e) => &e.base,)+
@@ -503,6 +633,9 @@ impl_event_dispatch!(
     ThinkingTextMessageStart,
     ThinkingTextMessageContent,
     ThinkingTextMessageEnd,
+    SubagentStarted,
+    SubagentFinished,
+    SubagentError,
 );
 
 pub mod factory {
@@ -524,6 +657,7 @@ pub mod factory {
             run_id: run_id.into(),
             result: None,
             outcome: Some(RunFinishedOutcome::Success),
+            usage: Vec::new(),
             base: BaseEventFields::default(),
         })
     }
@@ -532,6 +666,7 @@ pub mod factory {
         Event::RunError(RunErrorEvent {
             message: message.into(),
             code: None,
+            usage: Vec::new(),
             base: BaseEventFields::default(),
         })
     }
@@ -737,6 +872,7 @@ mod tests {
                     metadata: None,
                 }],
             }),
+            usage: Vec::new(),
             base: BaseEventFields::default(),
         });
         round_trip(&event);
@@ -786,6 +922,8 @@ mod tests {
     }
 
     #[test]
+    // legacy: THINKING_* is upstream-deprecated but must still pass through for old streams.
+    #[allow(deprecated)]
     fn deprecated_thinking_events_round_trip() {
         round_trip(&Event::ThinkingStart(ThinkingStartEvent {
             title: Some("planning".into()),
@@ -864,6 +1002,7 @@ mod tests {
         let event = Event::RunError(RunErrorEvent {
             message: "boom".into(),
             code: Some("E_BOOM".into()),
+            usage: Vec::new(),
             base: BaseEventFields::default(),
         });
         round_trip(&event);
@@ -877,6 +1016,7 @@ mod tests {
             base: BaseEventFields {
                 timestamp: Some(123),
                 raw_event: Some(json!({"orig": true})),
+                metadata: None,
             },
         });
         round_trip(&event);
@@ -920,6 +1060,78 @@ mod tests {
         ]))
         .unwrap();
         assert!(matches!(p, UserMessageContent::Parts(_)));
+    }
+
+    #[test]
+    fn subagent_finished_suspended_outcome_uses_camel_case_ids() {
+        let event = Event::SubagentFinished(SubagentFinishedEvent {
+            subagent_run_id: "sub-1".into(),
+            result: None,
+            outcome: Some(SubagentFinishedOutcome::Suspended {
+                interrupt_ids: vec!["a".into(), "b".into()],
+            }),
+            base: BaseEventFields::default(),
+        });
+        let json = serde_json::to_value(&event).unwrap();
+        assert_eq!(json["subagentRunId"], "sub-1");
+        assert_eq!(
+            json["outcome"]["interruptIds"],
+            serde_json::json!(["a", "b"])
+        );
+        assert!(json["outcome"].get("interrupt_ids").is_none());
+        assert!(json.get("interruptIds").is_none());
+        round_trip(&event);
+    }
+
+    #[test]
+    fn subagent_started_full_fields_round_trip() {
+        let event = Event::SubagentStarted(SubagentStartedEvent {
+            subagent_run_id: "sub-1".into(),
+            name: "researcher".into(),
+            description: Some("deep dive".into()),
+            parent_subagent_run_id: Some("sub-0".into()),
+            parent_tool_call_id: Some("tc-1".into()),
+            parent_message_id: Some("m-1".into()),
+            base: BaseEventFields::default(),
+        });
+        round_trip(&event);
+        let json = serde_json::to_value(&event).unwrap();
+        assert_eq!(json["subagentRunId"], "sub-1");
+        assert_eq!(json["name"], "researcher");
+        assert_eq!(json["description"], "deep dive");
+        assert_eq!(json["parentSubagentRunId"], "sub-0");
+        assert_eq!(json["parentToolCallId"], "tc-1");
+        assert_eq!(json["parentMessageId"], "m-1");
+    }
+
+    #[test]
+    fn token_usage_all_fields_round_trip() {
+        let event = Event::RunFinished(RunFinishedEvent {
+            thread_id: "t1".into(),
+            run_id: "r1".into(),
+            result: None,
+            outcome: Some(RunFinishedOutcome::Success),
+            usage: vec![TokenUsage {
+                provider: Some("openai".into()),
+                model: Some("gpt-5".into()),
+                input_tokens: Some(10),
+                output_tokens: Some(20),
+                total_tokens: Some(30),
+                reasoning_tokens: Some(5),
+                cached_input_tokens: Some(2),
+            }],
+            base: BaseEventFields::default(),
+        });
+        round_trip(&event);
+        let json = serde_json::to_value(&event).unwrap();
+        let u = &json["usage"][0];
+        assert_eq!(u["provider"], "openai");
+        assert_eq!(u["model"], "gpt-5");
+        assert_eq!(u["inputTokens"], 10);
+        assert_eq!(u["outputTokens"], 20);
+        assert_eq!(u["totalTokens"], 30);
+        assert_eq!(u["reasoningTokens"], 5);
+        assert_eq!(u["cachedInputTokens"], 2);
     }
 
     #[test]

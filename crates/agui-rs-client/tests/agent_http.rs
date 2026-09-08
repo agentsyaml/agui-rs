@@ -24,6 +24,7 @@ fn http_agent(url: String, headers: HashMap<String, String>) -> HttpAgent {
         headers,
         agent: AgentConfig::default(),
         request_executor: None,
+        accept_protobuf: false,
     })
 }
 
@@ -232,6 +233,7 @@ async fn should_use_custom_request_executor_when_configured() {
         headers: HashMap::new(),
         agent: AgentConfig::default(),
         request_executor: Some(executor),
+        accept_protobuf: false,
     })
     .run(RunAgentInput::new("thread-1", "run-1"))
     .await

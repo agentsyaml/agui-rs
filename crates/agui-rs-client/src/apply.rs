@@ -53,6 +53,8 @@ where
     })
 }
 
+// legacy: THINKING_* is upstream-deprecated but must still pass through for old streams.
+#[allow(deprecated)]
 pub fn apply_event(state: &mut ApplyState, event: &Event) -> Result<()> {
     match event {
         Event::TextMessageStart(event) => {
@@ -184,7 +186,11 @@ pub fn apply_event(state: &mut ApplyState, event: &Event) -> Result<()> {
         | Event::RunFinished(_)
         | Event::RunError(_)
         | Event::StepStarted(_)
-        | Event::StepFinished(_) => {}
+        | Event::StepFinished(_)
+        // ponytail: subagent events carry no message/state projection.
+        | Event::SubagentStarted(_)
+        | Event::SubagentFinished(_)
+        | Event::SubagentError(_) => {}
     }
 
     Ok(())
@@ -621,6 +627,8 @@ mod tests {
 
     mod reasoning_apply {
         use super::*;
+        // legacy: THINKING_* is upstream-deprecated but must still pass through for old streams.
+        #[allow(deprecated)]
         use agui_rs_core::{
             ReasoningEncryptedValueEvent, ReasoningMessageContentEvent, ReasoningMessageEndEvent,
             ReasoningMessageRole, ReasoningMessageStartEvent, ThinkingEndEvent, ThinkingStartEvent,
@@ -695,6 +703,8 @@ mod tests {
         }
 
         #[tokio::test]
+        // legacy: THINKING_* is upstream-deprecated but must still pass through for old streams.
+        #[allow(deprecated)]
         async fn thinking_events_are_accepted_as_noops() {
             let state = apply_all(vec![
                 Event::ThinkingStart(ThinkingStartEvent {

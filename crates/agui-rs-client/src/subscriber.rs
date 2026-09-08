@@ -1,4 +1,6 @@
 use agui_rs_core::types::ActivityMessage;
+// legacy: THINKING_* is upstream-deprecated but must still pass through for old streams.
+#[allow(deprecated)]
 use agui_rs_core::{
     ActivityDeltaEvent, ActivitySnapshotEvent, AgUiError, CustomEvent, Event, Interrupt, Message,
     MessagesSnapshotEvent, RawEvent, ReasoningEncryptedValueEvent, ReasoningEndEvent,
@@ -317,6 +319,8 @@ pub trait AgentSubscriber: Send + Sync {
         std::result::Result::Ok(())
     }
 
+    // legacy: THINKING_* is upstream-deprecated but must still pass through for old streams.
+    #[allow(deprecated)]
     async fn on_thinking_start(
         &self,
         _ctx: &EventContext<'_, ThinkingStartEvent>,
@@ -324,6 +328,8 @@ pub trait AgentSubscriber: Send + Sync {
         std::result::Result::Ok(())
     }
 
+    // legacy: THINKING_* is upstream-deprecated but must still pass through for old streams.
+    #[allow(deprecated)]
     async fn on_thinking_end(
         &self,
         _ctx: &EventContext<'_, ThinkingEndEvent>,
@@ -495,6 +501,13 @@ macro_rules! impl_composite_subscriber {
     };
 }
 
+// legacy: THINKING_* is upstream-deprecated but must still pass through for old streams.
+#[allow(deprecated)]
+type ThinkingStartCtx<'a> = EventContext<'a, ThinkingStartEvent>;
+// legacy: THINKING_* is upstream-deprecated but must still pass through for old streams.
+#[allow(deprecated)]
+type ThinkingEndCtx<'a> = EventContext<'a, ThinkingEndEvent>;
+
 impl_composite_subscriber! {
     unit: [
         on_run_initialized(ctx: &RunContext),
@@ -536,8 +549,8 @@ impl_composite_subscriber! {
         on_reasoning_chunk(EventContext<'_, ReasoningMessageChunkEvent>),
         on_reasoning_finished(EventContext<'_, ReasoningEndEvent>),
         on_reasoning_encrypted_value(EventContext<'_, ReasoningEncryptedValueEvent>),
-        on_thinking_start(EventContext<'_, ThinkingStartEvent>),
-        on_thinking_end(EventContext<'_, ThinkingEndEvent>),
+        on_thinking_start(ThinkingStartCtx<'_>),
+        on_thinking_end(ThinkingEndCtx<'_>),
         on_state_snapshot(EventContext<'_, StateSnapshotEvent>),
         on_state_delta(EventContext<'_, StateDeltaEvent>),
         on_messages_snapshot(EventContext<'_, MessagesSnapshotEvent>),
@@ -551,6 +564,8 @@ impl_composite_subscriber! {
 }
 
 #[cfg(test)]
+// legacy: THINKING_* is upstream-deprecated but must still pass through for old streams.
+#[allow(deprecated)]
 mod subscriber_tests {
     use super::*;
     use agui_rs_core::types::AssistantMessage;
@@ -612,6 +627,7 @@ mod subscriber_tests {
             run_id: "run-1".into(),
             result: Some(json!({"ok": true})),
             outcome: Some(RunFinishedOutcome::Success),
+            usage: Vec::new(),
             base: BaseEventFields::default(),
         }
     }
@@ -620,6 +636,7 @@ mod subscriber_tests {
         RunErrorEvent {
             message: "boom".into(),
             code: Some("E_FAIL".into()),
+            usage: Vec::new(),
             base: BaseEventFields::default(),
         }
     }

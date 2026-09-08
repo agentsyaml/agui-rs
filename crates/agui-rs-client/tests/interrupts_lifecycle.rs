@@ -65,6 +65,7 @@ fn run_finished_interrupt(interrupts: Vec<Interrupt>) -> Event {
         run_id: "run-1".into(),
         result: None,
         outcome: Some(RunFinishedOutcome::Interrupt { interrupts }),
+        usage: Vec::new(),
         base: BaseEventFields::default(),
     })
 }

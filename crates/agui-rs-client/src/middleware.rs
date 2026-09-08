@@ -1,4 +1,6 @@
 use agui_rs_core::types::UserMessage;
+// legacy: THINKING_* is upstream-deprecated but must still pass through for old streams.
+#[allow(deprecated)]
 use agui_rs_core::{
     AgUiError, BinaryInputContent, Event, InputContent, InputContentSource, Message,
     ReasoningEndEvent, ReasoningMessageContentEvent, ReasoningMessageEndEvent,
@@ -288,6 +290,8 @@ pub mod backward_compat {
 
     #[async_trait]
     impl Middleware for BackwardCompat0_0_45 {
+        // legacy: THINKING_* is upstream-deprecated but must still pass through for old streams.
+        #[allow(deprecated)]
         async fn run(
             &self,
             input: MiddlewareInput,
@@ -916,6 +920,8 @@ mod filter_tool_calls_tests {
 }
 
 #[cfg(test)]
+// legacy: THINKING_* is upstream-deprecated but must still pass through for old streams.
+#[allow(deprecated)]
 mod backward_compat_tests {
     use super::backward_compat::{
         BackwardCompat0_0_39, BackwardCompat0_0_45, BackwardCompat0_0_47,

@@ -31,6 +31,7 @@ fn run_finished(
         run_id: run_id.into(),
         result,
         outcome,
+        usage: Vec::new(),
         base: BaseEventFields::default(),
     })
 }

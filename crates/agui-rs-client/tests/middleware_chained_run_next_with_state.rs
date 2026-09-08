@@ -101,6 +101,7 @@ async fn outer_and_inner_state_tracking_middlewares_both_capture_messages() {
                 run_id: "test-run".into(),
                 result: None,
                 outcome: None,
+                usage: Vec::new(),
                 base: BaseEventFields::default(),
             }),
         ],

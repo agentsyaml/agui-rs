@@ -1,5 +1,7 @@
 #![allow(dead_code)]
 #![allow(unused_imports)]
+// legacy: THINKING_* is upstream-deprecated but must still pass through for old streams.
+#![allow(deprecated)]
 
 #[path = "../src/middleware.rs"]
 mod middleware;

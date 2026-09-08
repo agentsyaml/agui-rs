@@ -102,6 +102,7 @@ async fn function_based_middleware_can_intercept_events() {
                     run_id: "test-run".into(),
                     result: None,
                     outcome: Some(RunFinishedOutcome::Success),
+                    usage: Vec::new(),
                     base: BaseEventFields::default(),
                 })),
             ])) as middleware::EventStream)

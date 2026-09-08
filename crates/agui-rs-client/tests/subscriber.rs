@@ -5,6 +5,8 @@
 mod subscriber_impl;
 
 use agui_rs_core::types::{ActivityMessage, AssistantMessage};
+// legacy: THINKING_* is upstream-deprecated but must still pass through for old streams.
+#[allow(deprecated)]
 use agui_rs_core::{
     BaseEventFields, CustomEvent, Event, FunctionCall, Interrupt, Message, RawEvent,
     ReasoningEncryptedValueEvent, ReasoningEncryptedValueSubtype, ReasoningEndEvent,
@@ -69,6 +71,7 @@ fn run_finished_event() -> RunFinishedEvent {
         run_id: "run-1".into(),
         result: Some(json!({"ok": true})),
         outcome: Some(RunFinishedOutcome::Success),
+        usage: Vec::new(),
         base: BaseEventFields::default(),
     }
 }
@@ -77,6 +80,7 @@ fn run_error_event() -> RunErrorEvent {
     RunErrorEvent {
         message: "boom".into(),
         code: Some("E_FAIL".into()),
+        usage: Vec::new(),
         base: BaseEventFields::default(),
     }
 }
@@ -227,6 +231,8 @@ fn reasoning_encrypted_value_event() -> ReasoningEncryptedValueEvent {
     }
 }
 
+// legacy: THINKING_* is upstream-deprecated but must still pass through for old streams.
+#[allow(deprecated)]
 fn thinking_start_event() -> ThinkingStartEvent {
     ThinkingStartEvent {
         title: Some("plan".into()),
@@ -234,6 +240,8 @@ fn thinking_start_event() -> ThinkingStartEvent {
     }
 }
 
+// legacy: THINKING_* is upstream-deprecated but must still pass through for old streams.
+#[allow(deprecated)]
 fn thinking_end_event() -> ThinkingEndEvent {
     ThinkingEndEvent {
         base: BaseEventFields::default(),

@@ -28,6 +28,7 @@ fn get_run_outcome_covers_legacy_success_and_interrupt_cases() {
         run_id: "r-1".into(),
         result: None,
         outcome: None,
+        usage: Vec::new(),
         base: BaseEventFields::default(),
     });
     let success = Event::RunFinished(RunFinishedEvent {
@@ -35,6 +36,7 @@ fn get_run_outcome_covers_legacy_success_and_interrupt_cases() {
         run_id: "r-1".into(),
         result: None,
         outcome: Some(RunFinishedOutcome::Success),
+        usage: Vec::new(),
         base: BaseEventFields::default(),
     });
     let interrupts = vec![interrupt("int-1", None)];
@@ -45,6 +47,7 @@ fn get_run_outcome_covers_legacy_success_and_interrupt_cases() {
         outcome: Some(RunFinishedOutcome::Interrupt {
             interrupts: interrupts.clone(),
         }),
+        usage: Vec::new(),
         base: BaseEventFields::default(),
     });
 
@@ -73,6 +76,7 @@ fn interrupt_expiration_honors_missing_past_future_and_injected_now() {
         outcome: Some(RunFinishedOutcome::Interrupt {
             interrupts: vec![interrupt("int-1", None)],
         }),
+        usage: Vec::new(),
         base: BaseEventFields::default(),
     });
     let past = Event::RunFinished(RunFinishedEvent {
@@ -82,6 +86,7 @@ fn interrupt_expiration_honors_missing_past_future_and_injected_now() {
         outcome: Some(RunFinishedOutcome::Interrupt {
             interrupts: vec![interrupt("int-1", Some("2000-01-01T00:00:00Z"))],
         }),
+        usage: Vec::new(),
         base: BaseEventFields::default(),
     });
     let future = Event::RunFinished(RunFinishedEvent {
@@ -91,6 +96,7 @@ fn interrupt_expiration_honors_missing_past_future_and_injected_now() {
         outcome: Some(RunFinishedOutcome::Interrupt {
             interrupts: vec![interrupt("int-1", Some("2099-01-01T00:00:00Z"))],
         }),
+        usage: Vec::new(),
         base: BaseEventFields::default(),
     });
     let deterministic = Event::RunFinished(RunFinishedEvent {
@@ -100,6 +106,7 @@ fn interrupt_expiration_honors_missing_past_future_and_injected_now() {
         outcome: Some(RunFinishedOutcome::Interrupt {
             interrupts: vec![interrupt("int-1", Some("2026-04-22T12:00:00Z"))],
         }),
+        usage: Vec::new(),
         base: BaseEventFields::default(),
     });
 

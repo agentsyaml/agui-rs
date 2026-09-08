@@ -1,3 +1,5 @@
+// legacy: THINKING_* is upstream-deprecated but must still pass through for old streams.
+#[allow(deprecated)]
 use crate::events::{
     ActivityDeltaEvent, ActivitySnapshotEvent, BaseEventFields, CustomEvent, Event,
     MessagesSnapshotEvent, RawEvent, ReasoningEncryptedValueEvent, ReasoningEncryptedValueSubtype,
@@ -26,6 +28,7 @@ fn base_fields(timestamp: Option<i64>, raw_event: Option<Value>) -> BaseEventFie
     BaseEventFields {
         timestamp: Some(timestamp.unwrap_or_else(current_timestamp_millis)),
         raw_event,
+        metadata: None,
     }
 }
 
@@ -90,6 +93,8 @@ pub fn create_text_message_chunk_event(
 }
 
 /// Creates a thinking text message start event.
+// legacy: THINKING_* is upstream-deprecated but must still pass through for old streams.
+#[allow(deprecated)]
 pub fn create_thinking_text_message_start_event(
     timestamp: Option<i64>,
     raw_event: Option<Value>,
@@ -100,6 +105,8 @@ pub fn create_thinking_text_message_start_event(
 }
 
 /// Creates a thinking text message content event.
+// legacy: THINKING_* is upstream-deprecated but must still pass through for old streams.
+#[allow(deprecated)]
 pub fn create_thinking_text_message_content_event(
     delta: impl Into<String>,
     timestamp: Option<i64>,
@@ -112,6 +119,8 @@ pub fn create_thinking_text_message_content_event(
 }
 
 /// Creates a thinking text message end event.
+// legacy: THINKING_* is upstream-deprecated but must still pass through for old streams.
+#[allow(deprecated)]
 pub fn create_thinking_text_message_end_event(
     timestamp: Option<i64>,
     raw_event: Option<Value>,
@@ -200,6 +209,8 @@ pub fn create_tool_call_result_event(
 }
 
 /// Creates a thinking start event.
+// legacy: THINKING_* is upstream-deprecated but must still pass through for old streams.
+#[allow(deprecated)]
 pub fn create_thinking_start_event(
     title: Option<String>,
     timestamp: Option<i64>,
@@ -212,6 +223,8 @@ pub fn create_thinking_start_event(
 }
 
 /// Creates a thinking end event.
+// legacy: THINKING_* is upstream-deprecated but must still pass through for old streams.
+#[allow(deprecated)]
 pub fn create_thinking_end_event(timestamp: Option<i64>, raw_event: Option<Value>) -> Event {
     Event::ThinkingEnd(ThinkingEndEvent {
         base: base_fields(timestamp, raw_event),
@@ -348,6 +361,7 @@ pub fn create_run_finished_event(
         run_id: run_id.into(),
         result,
         outcome,
+        usage: Vec::new(),
         base: base_fields(timestamp, raw_event),
     })
 }
@@ -399,6 +413,7 @@ pub fn create_run_error_event(
     Event::RunError(RunErrorEvent {
         message: message.into(),
         code,
+        usage: Vec::new(),
         base: base_fields(timestamp, raw_event),
     })
 }
@@ -522,6 +537,8 @@ pub fn create_reasoning_encrypted_value_event(
 }
 
 #[cfg(test)]
+// legacy: THINKING_* is upstream-deprecated but must still pass through for old streams.
+#[allow(deprecated)]
 mod factories_tests {
     use super::*;
     use crate::events::EventType;

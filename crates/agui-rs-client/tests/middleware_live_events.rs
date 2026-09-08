@@ -61,6 +61,7 @@ async fn middleware_can_modify_live_events_before_agent_pipeline() {
                     run_id: input.run_agent_input.run_id,
                     result: Some(json!({"success": true})),
                     outcome: None,
+                    usage: Vec::new(),
                     base: BaseEventFields::default(),
                 })),
             ])) as middleware::EventStream)

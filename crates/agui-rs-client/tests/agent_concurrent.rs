@@ -32,6 +32,7 @@ impl Agent for EchoAgent {
                 run_id,
                 result: None,
                 outcome: Some(agui_rs_core::RunFinishedOutcome::Success),
+                usage: Vec::new(),
                 base: agui_rs_core::BaseEventFields::default(),
             })),
         ])))

@@ -61,10 +61,29 @@ impl EventEncoder {
 }
 
 fn accepts_protobuf(accept: &str) -> bool {
-    accept
-        .split(',')
-        .map(|part| part.split(';').next().unwrap_or("").trim())
-        .any(|mt| mt.eq_ignore_ascii_case(AGUI_MEDIA_TYPE_PROTOBUF) || mt == "*/*")
+    // ponytail: exact-match only, wildcards ignored; q=0 is a veto.
+    let mut proto_ok = false;
+    let mut proto_veto = false;
+    for part in accept.split(',') {
+        let mut segs = part.split(';');
+        let mt = segs.next().unwrap_or("").trim();
+        let mut q: f32 = 1.0;
+        for p in segs {
+            let norm: String = p.chars().filter(|c| !c.is_whitespace()).collect();
+            if let Some(v) = norm.strip_prefix("q=").or_else(|| norm.strip_prefix("Q=")) {
+                q = v.parse().unwrap_or(1.0);
+            }
+        }
+        if mt.eq_ignore_ascii_case(AGUI_MEDIA_TYPE_PROTOBUF) {
+            if q == 0.0 {
+                proto_veto = true;
+            } else {
+                proto_ok = true;
+            }
+        }
+        // ponytail: SSE q=0 needs no branch — fallback is already SSE.
+    }
+    proto_ok && !proto_veto
 }
 
 #[cfg(test)]
@@ -95,9 +114,9 @@ mod tests {
     }
 
     #[test]
-    fn star_accept_implies_protobuf_when_offered() {
+    fn star_accept_falls_back_to_sse() {
         let enc = EventEncoder::with_accept(Some("*/*"));
-        assert!(enc.accepts_protobuf());
+        assert!(!enc.accepts_protobuf());
     }
 
     #[test]

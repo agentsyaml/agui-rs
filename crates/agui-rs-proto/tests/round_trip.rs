@@ -2,7 +2,8 @@
 
 use agui_rs_core::{
     factory, AgUiError, BaseEventFields, CustomEvent, Event, Interrupt, RawEvent,
-    ReasoningStartEvent, RunFinishedEvent, RunFinishedOutcome,
+    ReasoningStartEvent, RunFinishedEvent, RunFinishedOutcome, SubagentErrorEvent,
+    SubagentFinishedEvent, SubagentFinishedOutcome, SubagentStartedEvent,
 };
 use serde_json::json;
 
@@ -68,6 +69,7 @@ fn run_finished_interrupt_outcome_round_trips() {
                 metadata: None,
             }],
         }),
+        usage: Vec::new(),
         base: BaseEventFields::default(),
     });
     assert_eq!(round_trip(&event), event);
@@ -80,6 +82,7 @@ fn run_finished_no_outcome_round_trips_to_none() {
         run_id: "r1".into(),
         result: None,
         outcome: None,
+        usage: Vec::new(),
         base: BaseEventFields::default(),
     });
     assert_eq!(round_trip(&event), event);
@@ -113,4 +116,53 @@ fn reasoning_events_are_not_part_of_proto_schema() {
     });
     let err = agui_rs_proto::encode(&event).expect_err("reasoning is not in proto schema");
     assert!(matches!(err, AgUiError::Unsupported(_)));
+}
+
+#[test]
+fn subagent_started_full_fields_round_trip() {
+    let event = Event::SubagentStarted(SubagentStartedEvent {
+        subagent_run_id: "sub-1".into(),
+        name: "researcher".into(),
+        description: Some("deep dive".into()),
+        parent_subagent_run_id: Some("sub-0".into()),
+        parent_tool_call_id: Some("tc-1".into()),
+        parent_message_id: Some("m-1".into()),
+        base: BaseEventFields::default(),
+    });
+    assert_eq!(round_trip(&event), event);
+}
+
+#[test]
+fn subagent_finished_suspended_ids_round_trip() {
+    let event = Event::SubagentFinished(SubagentFinishedEvent {
+        subagent_run_id: "sub-1".into(),
+        result: Some(json!({"summary": "paused"})),
+        outcome: Some(SubagentFinishedOutcome::Suspended {
+            interrupt_ids: vec!["a".into()],
+        }),
+        base: BaseEventFields::default(),
+    });
+    assert_eq!(round_trip(&event), event);
+}
+
+#[test]
+fn subagent_finished_success_with_result_round_trips() {
+    let event = Event::SubagentFinished(SubagentFinishedEvent {
+        subagent_run_id: "sub-1".into(),
+        result: Some(json!({"ok": true})),
+        outcome: Some(SubagentFinishedOutcome::Success),
+        base: BaseEventFields::default(),
+    });
+    assert_eq!(round_trip(&event), event);
+}
+
+#[test]
+fn subagent_error_round_trips() {
+    let event = Event::SubagentError(SubagentErrorEvent {
+        subagent_run_id: "sub-1".into(),
+        message: "boom".into(),
+        code: Some("E_SUB".into()),
+        base: BaseEventFields::default(),
+    });
+    assert_eq!(round_trip(&event), event);
 }

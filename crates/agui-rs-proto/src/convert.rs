@@ -5,8 +5,8 @@ use agui_rs_core::types::{
     ReasoningMessage, SystemMessage, ToolMessage, UserMessage, UserMessageContent,
 };
 use agui_rs_core::{
-    AgUiError, BaseEventFields, Event, Interrupt, Message, Result, RunFinishedOutcome, ToolCall,
-    ToolCallKind,
+    AgUiError, BaseEventFields, Event, Interrupt, Message, Result, RunFinishedOutcome,
+    SubagentFinishedOutcome, TokenUsage, ToolCall, ToolCallKind,
 };
 use prost::Message as _;
 
@@ -40,6 +40,7 @@ fn base_to_proto(base: &BaseEventFields, ty: pb::EventType) -> pb::BaseEvent {
         r#type: ty as i32,
         timestamp: base.timestamp,
         raw_event: base.raw_event.as_ref().map(json_to_proto),
+        metadata: base.metadata.as_ref().map(json_to_proto),
     }
 }
 
@@ -48,9 +49,42 @@ fn base_from_proto(base: Option<pb::BaseEvent>) -> BaseEventFields {
         Some(base) => BaseEventFields {
             timestamp: base.timestamp,
             raw_event: base.raw_event.as_ref().map(proto_to_json),
+            metadata: base.metadata.as_ref().map(proto_to_json),
         },
         None => BaseEventFields::default(),
     }
+}
+
+// ----- token usage -----
+
+fn usage_to_proto(usage: &[TokenUsage]) -> Vec<pb::Usage> {
+    usage
+        .iter()
+        .map(|u| pb::Usage {
+            provider: u.provider.clone(),
+            model: u.model.clone(),
+            input_tokens: u.input_tokens,
+            output_tokens: u.output_tokens,
+            total_tokens: u.total_tokens,
+            reasoning_tokens: u.reasoning_tokens,
+            cached_input_tokens: u.cached_input_tokens,
+        })
+        .collect()
+}
+
+fn usage_from_proto(usage: Vec<pb::Usage>) -> Vec<TokenUsage> {
+    usage
+        .into_iter()
+        .map(|u| TokenUsage {
+            provider: u.provider,
+            model: u.model,
+            input_tokens: u.input_tokens,
+            output_tokens: u.output_tokens,
+            total_tokens: u.total_tokens,
+            reasoning_tokens: u.reasoning_tokens,
+            cached_input_tokens: u.cached_input_tokens,
+        })
+        .collect()
 }
 
 // ----- tool calls -----
@@ -422,6 +456,7 @@ fn patch_op_from_proto(op: pb::JsonPatchOperation) -> serde_json::Value {
 
 fn to_proto_event(event: &Event) -> Result<pb::event::Event> {
     use pb::event::Event as PE;
+    #[allow(deprecated)]
     let e = match event {
         Event::TextMessageStart(ev) => PE::TextMessageStart(pb::TextMessageStartEvent {
             base_event: Some(base_to_proto(&ev.base, pb::EventType::TextMessageStart)),
@@ -514,12 +549,14 @@ fn to_proto_event(event: &Event) -> Result<pb::event::Event> {
                 result: ev.result.as_ref().map(json_to_proto),
                 outcome,
                 interrupts,
+                usage: usage_to_proto(&ev.usage),
             })
         }
         Event::RunError(ev) => PE::RunError(pb::RunErrorEvent {
             base_event: Some(base_to_proto(&ev.base, pb::EventType::RunError)),
             code: ev.code.clone(),
             message: ev.message.clone(),
+            usage: usage_to_proto(&ev.usage),
         }),
         Event::StepStarted(ev) => PE::StepStarted(pb::StepStartedEvent {
             base_event: Some(base_to_proto(&ev.base, pb::EventType::StepStarted)),
@@ -528,6 +565,39 @@ fn to_proto_event(event: &Event) -> Result<pb::event::Event> {
         Event::StepFinished(ev) => PE::StepFinished(pb::StepFinishedEvent {
             base_event: Some(base_to_proto(&ev.base, pb::EventType::StepFinished)),
             step_name: ev.step_name.clone(),
+        }),
+        Event::SubagentStarted(ev) => PE::SubagentStarted(pb::SubagentStartedEvent {
+            base_event: Some(base_to_proto(&ev.base, pb::EventType::SubagentStarted)),
+            subagent_run_id: ev.subagent_run_id.clone(),
+            name: ev.name.clone(),
+            description: ev.description.clone(),
+            parent_subagent_run_id: ev.parent_subagent_run_id.clone(),
+            parent_tool_call_id: ev.parent_tool_call_id.clone(),
+            parent_message_id: ev.parent_message_id.clone(),
+        }),
+        Event::SubagentFinished(ev) => {
+            let outcome = match &ev.outcome {
+                None => String::new(),
+                Some(SubagentFinishedOutcome::Success) => "success".to_string(),
+                Some(SubagentFinishedOutcome::Suspended { .. }) => "suspended".to_string(),
+            };
+            let interrupt_ids = match &ev.outcome {
+                Some(SubagentFinishedOutcome::Suspended { interrupt_ids }) => interrupt_ids.clone(),
+                _ => Vec::new(),
+            };
+            PE::SubagentFinished(pb::SubagentFinishedEvent {
+                base_event: Some(base_to_proto(&ev.base, pb::EventType::SubagentFinished)),
+                subagent_run_id: ev.subagent_run_id.clone(),
+                result: ev.result.as_ref().map(json_to_proto),
+                outcome,
+                interrupt_ids,
+            })
+        }
+        Event::SubagentError(ev) => PE::SubagentError(pb::SubagentErrorEvent {
+            base_event: Some(base_to_proto(&ev.base, pb::EventType::SubagentError)),
+            subagent_run_id: ev.subagent_run_id.clone(),
+            message: ev.message.clone(),
+            code: ev.code.clone(),
         }),
         // Not part of the canonical protobuf schema.
         Event::ActivitySnapshot(_)
@@ -557,7 +627,8 @@ fn to_proto_event(event: &Event) -> Result<pb::event::Event> {
 fn from_proto_event(event: pb::event::Event) -> Result<Event> {
     use agui_rs_core::{
         CustomEvent, RawEvent, RunErrorEvent, RunFinishedEvent, RunStartedEvent, StateDeltaEvent,
-        StateSnapshotEvent, StepFinishedEvent, StepStartedEvent, TextMessageChunkEvent,
+        StateSnapshotEvent, StepFinishedEvent, StepStartedEvent, SubagentErrorEvent,
+        SubagentFinishedEvent, SubagentStartedEvent, TextMessageChunkEvent,
         TextMessageContentEvent, TextMessageEndEvent, TextMessageStartEvent, ToolCallArgsEvent,
         ToolCallChunkEvent, ToolCallEndEvent, ToolCallStartEvent,
     };
@@ -651,6 +722,7 @@ fn from_proto_event(event: pb::event::Event) -> Result<Event> {
         PE::RunStarted(ev) => Event::RunStarted(RunStartedEvent {
             thread_id: ev.thread_id,
             run_id: ev.run_id,
+            // Upstream proto drops parent_run_id/input; JSON side keeps them.
             parent_run_id: None,
             input: None,
             base: base_from_proto(ev.base_event),
@@ -672,12 +744,14 @@ fn from_proto_event(event: pb::event::Event) -> Result<Event> {
                 run_id: ev.run_id,
                 result: ev.result.as_ref().map(proto_to_json),
                 outcome,
+                usage: usage_from_proto(ev.usage),
                 base: base_from_proto(ev.base_event),
             })
         }
         PE::RunError(ev) => Event::RunError(RunErrorEvent {
             message: ev.message,
             code: ev.code,
+            usage: usage_from_proto(ev.usage),
             base: base_from_proto(ev.base_event),
         }),
         PE::StepStarted(ev) => Event::StepStarted(StepStartedEvent {
@@ -686,6 +760,37 @@ fn from_proto_event(event: pb::event::Event) -> Result<Event> {
         }),
         PE::StepFinished(ev) => Event::StepFinished(StepFinishedEvent {
             step_name: ev.step_name,
+            base: base_from_proto(ev.base_event),
+        }),
+        PE::SubagentStarted(ev) => Event::SubagentStarted(SubagentStartedEvent {
+            subagent_run_id: ev.subagent_run_id,
+            name: ev.name,
+            description: ev.description,
+            parent_subagent_run_id: ev.parent_subagent_run_id,
+            parent_tool_call_id: ev.parent_tool_call_id,
+            parent_message_id: ev.parent_message_id,
+            base: base_from_proto(ev.base_event),
+        }),
+        PE::SubagentFinished(ev) => {
+            // ponytail: unknown outcome degrades to None (ids have no top-level slot).
+            let outcome = match ev.outcome.as_str() {
+                "success" => Some(SubagentFinishedOutcome::Success),
+                "suspended" => Some(SubagentFinishedOutcome::Suspended {
+                    interrupt_ids: ev.interrupt_ids.clone(),
+                }),
+                _ => None,
+            };
+            Event::SubagentFinished(SubagentFinishedEvent {
+                subagent_run_id: ev.subagent_run_id,
+                result: ev.result.as_ref().map(proto_to_json),
+                outcome,
+                base: base_from_proto(ev.base_event),
+            })
+        }
+        PE::SubagentError(ev) => Event::SubagentError(SubagentErrorEvent {
+            subagent_run_id: ev.subagent_run_id,
+            message: ev.message,
+            code: ev.code,
             base: base_from_proto(ev.base_event),
         }),
     };
