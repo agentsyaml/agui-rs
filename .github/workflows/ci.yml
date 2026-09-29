@@ -72,39 +72,16 @@ jobs:
       - name: Test
         run: cargo test --workspace --all-features
 
-  publish-dry-run:
-    name: Publish dry-run
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache
-        uses: actions/cache@v5
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-
-      - name: Publish dry-run (in dependency order)
-        # `cargo publish --dry-run` resolves internal path-deps against the
-        # crates.io index, which only knows PUBLISHED versions. A lockstep
-        # breaking bump (all six crates move together) therefore fails the
-        # dry-run with "failed to select a version" until the new versions
-        # are actually live. Pin internal deps to the workspace version for
-        # the duration of the dry-run, then restore — the real publish
-        # (publish.yml) runs in dependency order and needs no such dance.
-        run: |
-          cp Cargo.toml Cargo.toml.bak
-          trap 'mv Cargo.toml.bak Cargo.toml' EXIT
-          WS_VERSION="$(sed -n 's/^version *= *"\(.*\)"/\1/p' Cargo.toml | head -1)"
-          export WS_VERSION
-          perl -pi -e 's{(path = "crates/agui-rs-[a-z]+",\s*version = ")[^"]+}{$1 . $ENV{WS_VERSION}}ge' Cargo.toml
-          for c in agui-rs-core agui-rs-proto agui-rs-encoder agui-rs-client agui-rs-server agui-rs; do
-            cargo publish -p "$c" --dry-run --no-verify
-          done
+  # There used to be a "Publish dry-run" job here. It was removed because
+  # every cargo packaging command resolves internal path-deps against the
+  # crates.io index, which only knows PUBLISHED versions. Our six crates
+  # version-lockstep, so a breaking bump makes the requirement unsatisfiable
+  # until the new versions are live — no dry-run, package or otherwise, can
+  # pass in the window between bumping and publishing.
+  #
+  # Publishing is gated instead by publish.yml, which runs on a v* tag,
+  # gates on fmt/clippy/test, and publishes in dependency order against the
+  # live index (each crate waits for the previous to propagate).
 
   msrv:
     name: MSRV (1.75)
