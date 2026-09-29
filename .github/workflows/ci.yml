@@ -89,13 +89,22 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Publish dry-run (in dependency order)
+        # `cargo publish --dry-run` resolves internal path-deps against the
+        # crates.io index, which only knows PUBLISHED versions. A lockstep
+        # breaking bump (all six crates move together) therefore fails the
+        # dry-run with "failed to select a version" until the new versions
+        # are actually live. Pin internal deps to the workspace version for
+        # the duration of the dry-run, then restore — the real publish
+        # (publish.yml) runs in dependency order and needs no such dance.
         run: |
-          cargo publish -p agui-rs-core    --dry-run --no-verify
-          cargo publish -p agui-rs-proto   --dry-run --no-verify
-          cargo publish -p agui-rs-encoder --dry-run --no-verify
-          cargo publish -p agui-rs-client  --dry-run --no-verify
-          cargo publish -p agui-rs-server  --dry-run --no-verify
-          cargo publish -p agui-rs         --dry-run --no-verify
+          cp Cargo.toml Cargo.toml.bak
+          trap 'mv Cargo.toml.bak Cargo.toml' EXIT
+          WS_VERSION="$(sed -n 's/^version *= *"\(.*\)"/\1/p' Cargo.toml | head -1)"
+          export WS_VERSION
+          perl -pi -e 's{(path = "crates/agui-rs-[a-z]+",\s*version = ")[^"]+}{$1 . $ENV{WS_VERSION}}ge' Cargo.toml
+          for c in agui-rs-core agui-rs-proto agui-rs-encoder agui-rs-client agui-rs-server agui-rs; do
+            cargo publish -p "$c" --dry-run --no-verify
+          done
 
   msrv:
     name: MSRV (1.75)
