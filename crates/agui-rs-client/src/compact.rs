@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 
 use agui_rs_core::{
-    BaseEventFields, Event, StateSnapshotEvent, TextMessageContentEvent, ToolCallArgsEvent,
+    AttributableFields, BaseEventFields, Event, StateSnapshotEvent, TextMessageContentEvent,
+    ToolCallArgsEvent,
 };
 use serde_json::Value;
 
@@ -52,9 +53,9 @@ impl PendingToolCall {
 /// Compacts streaming AG-UI event sequences.
 ///
 /// Mirrors the canonical TypeScript `compactEvents`: only **text messages**,
-/// **tool calls**, and **state** are compacted. Reasoning, thinking, activity,
-/// and all other events pass through unchanged (buffered after an open
-/// text/tool sequence when they appear mid-stream).
+/// **tool calls**, and **state** are compacted. Reasoning, activity, and all
+/// other events pass through unchanged (buffered after an open text/tool
+/// sequence when they appear mid-stream).
 pub fn compact_events(events: Vec<Event>) -> Vec<Event> {
     let mut compacted = Vec::new();
     let mut pending_text_messages: HashMap<String, PendingTextMessage> = HashMap::new();
@@ -217,6 +218,7 @@ fn flush_state(state_events: &mut Vec<Event>, compacted: &mut Vec<Event>) {
     compacted.push(Event::StateSnapshot(StateSnapshotEvent {
         snapshot: state,
         base: BaseEventFields::default(),
+        attributable: AttributableFields::default(),
     }));
 }
 
@@ -242,6 +244,7 @@ fn flush_text_message(
                 .map(|part| part.delta)
                 .collect(),
             base: BaseEventFields::default(),
+            attributable: AttributableFields::default(),
         }));
     }
 
@@ -270,6 +273,7 @@ fn flush_tool_call(
             tool_call_id: tool_call_id.to_string(),
             delta: pending.args.into_iter().map(|part| part.delta).collect(),
             base: BaseEventFields::default(),
+            attributable: AttributableFields::default(),
         }));
     }
 
@@ -295,7 +299,7 @@ fn remove_open_id(order: &mut Vec<String>, id: &str) {
 #[cfg(test)]
 mod tests {
     use agui_rs_core::{
-        factory, BaseEventFields, CustomEvent, Event, ReasoningEndEvent,
+        factory, AttributableFields, BaseEventFields, CustomEvent, Event, ReasoningEndEvent,
         ReasoningMessageContentEvent, ReasoningMessageEndEvent, ReasoningMessageRole,
         ReasoningMessageStartEvent, ReasoningStartEvent, TextMessageRole,
     };
@@ -307,6 +311,7 @@ mod tests {
         Event::TextMessageStart(agui_rs_core::TextMessageStartEvent {
             message_id: message_id.into(),
             role: TextMessageRole::Assistant,
+            attributable: AttributableFields::default(),
             name: None,
             base: BaseEventFields::default(),
         })
@@ -316,6 +321,7 @@ mod tests {
         Event::ReasoningStart(ReasoningStartEvent {
             message_id: message_id.into(),
             base: BaseEventFields::default(),
+            attributable: AttributableFields::default(),
         })
     }
 
@@ -323,6 +329,7 @@ mod tests {
         Event::ReasoningMessageStart(ReasoningMessageStartEvent {
             message_id: message_id.into(),
             role: ReasoningMessageRole::Reasoning,
+            attributable: AttributableFields::default(),
             base: BaseEventFields::default(),
         })
     }
@@ -332,6 +339,7 @@ mod tests {
             message_id: message_id.into(),
             delta: delta.into(),
             base: BaseEventFields::default(),
+            attributable: AttributableFields::default(),
         })
     }
 
@@ -339,6 +347,7 @@ mod tests {
         Event::ReasoningMessageEnd(ReasoningMessageEndEvent {
             message_id: message_id.into(),
             base: BaseEventFields::default(),
+            attributable: AttributableFields::default(),
         })
     }
 
@@ -346,6 +355,7 @@ mod tests {
         Event::ReasoningEnd(ReasoningEndEvent {
             message_id: message_id.into(),
             base: BaseEventFields::default(),
+            attributable: AttributableFields::default(),
         })
     }
 
@@ -375,6 +385,7 @@ mod tests {
             name: "mark".into(),
             value: json!({"x": 1}),
             base: BaseEventFields::default(),
+            attributable: AttributableFields::default(),
         });
         let result = compact_events(vec![
             text_start("m1"),

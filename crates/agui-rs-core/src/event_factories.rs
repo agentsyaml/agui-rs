@@ -1,18 +1,15 @@
-// legacy: THINKING_* is upstream-deprecated but must still pass through for old streams.
-#[allow(deprecated)]
 use crate::events::{
-    ActivityDeltaEvent, ActivitySnapshotEvent, BaseEventFields, CustomEvent, Event,
-    MessagesSnapshotEvent, RawEvent, ReasoningEncryptedValueEvent, ReasoningEncryptedValueSubtype,
-    ReasoningEndEvent, ReasoningMessageChunkEvent, ReasoningMessageContentEvent,
-    ReasoningMessageEndEvent, ReasoningMessageRole, ReasoningMessageStartEvent,
-    ReasoningStartEvent, RunErrorEvent, RunFinishedEvent, RunFinishedOutcome, RunStartedEvent,
-    StateDeltaEvent, StateSnapshotEvent, StepFinishedEvent, StepStartedEvent,
-    TextMessageChunkEvent, TextMessageContentEvent, TextMessageEndEvent, TextMessageStartEvent,
-    ThinkingEndEvent, ThinkingStartEvent, ThinkingTextMessageContentEvent,
-    ThinkingTextMessageEndEvent, ThinkingTextMessageStartEvent, ToolCallArgsEvent,
-    ToolCallChunkEvent, ToolCallEndEvent, ToolCallResultEvent, ToolCallStartEvent, ToolResultRole,
+    ActivityDeltaEvent, ActivitySnapshotEvent, AttributableFields, BaseEventFields, CustomEvent,
+    Event, MessagesSnapshotEvent, RawEvent, ReasoningEncryptedValueEvent,
+    ReasoningEncryptedValueSubtype, ReasoningEndEvent, ReasoningMessageChunkEvent,
+    ReasoningMessageContentEvent, ReasoningMessageEndEvent, ReasoningMessageRole,
+    ReasoningMessageStartEvent, ReasoningStartEvent, RunErrorEvent, RunFinishedEvent,
+    RunFinishedOutcome, RunStartedEvent, StateDeltaEvent, StateSnapshotEvent, StepFinishedEvent,
+    StepStartedEvent, TextMessageChunkEvent, TextMessageContentEvent, TextMessageEndEvent,
+    TextMessageStartEvent, ToolCallArgsEvent, ToolCallChunkEvent, ToolCallEndEvent,
+    ToolCallResultEvent, ToolCallStartEvent, ToolResultRole,
 };
-use crate::types::{Interrupt, Message, RunAgentInput, State, TextMessageRole};
+use crate::types::{Interrupt, Message, RunAgentInput, State, TextMessageRole, ToolResultContent};
 use serde_json::Value;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -45,6 +42,7 @@ pub fn create_text_message_start_event(
         role: role.unwrap_or_default(),
         name,
         base: base_fields(timestamp, raw_event),
+        attributable: AttributableFields::default(),
     })
 }
 
@@ -59,6 +57,7 @@ pub fn create_text_message_content_event(
         message_id: message_id.into(),
         delta: delta.into(),
         base: base_fields(timestamp, raw_event),
+        attributable: AttributableFields::default(),
     })
 }
 
@@ -71,6 +70,7 @@ pub fn create_text_message_end_event(
     Event::TextMessageEnd(TextMessageEndEvent {
         message_id: message_id.into(),
         base: base_fields(timestamp, raw_event),
+        attributable: AttributableFields::default(),
     })
 }
 
@@ -89,44 +89,7 @@ pub fn create_text_message_chunk_event(
         delta,
         name,
         base: base_fields(timestamp, raw_event),
-    })
-}
-
-/// Creates a thinking text message start event.
-// legacy: THINKING_* is upstream-deprecated but must still pass through for old streams.
-#[allow(deprecated)]
-pub fn create_thinking_text_message_start_event(
-    timestamp: Option<i64>,
-    raw_event: Option<Value>,
-) -> Event {
-    Event::ThinkingTextMessageStart(ThinkingTextMessageStartEvent {
-        base: base_fields(timestamp, raw_event),
-    })
-}
-
-/// Creates a thinking text message content event.
-// legacy: THINKING_* is upstream-deprecated but must still pass through for old streams.
-#[allow(deprecated)]
-pub fn create_thinking_text_message_content_event(
-    delta: impl Into<String>,
-    timestamp: Option<i64>,
-    raw_event: Option<Value>,
-) -> Event {
-    Event::ThinkingTextMessageContent(ThinkingTextMessageContentEvent {
-        delta: delta.into(),
-        base: base_fields(timestamp, raw_event),
-    })
-}
-
-/// Creates a thinking text message end event.
-// legacy: THINKING_* is upstream-deprecated but must still pass through for old streams.
-#[allow(deprecated)]
-pub fn create_thinking_text_message_end_event(
-    timestamp: Option<i64>,
-    raw_event: Option<Value>,
-) -> Event {
-    Event::ThinkingTextMessageEnd(ThinkingTextMessageEndEvent {
-        base: base_fields(timestamp, raw_event),
+        attributable: AttributableFields::default(),
     })
 }
 
@@ -143,6 +106,7 @@ pub fn create_tool_call_start_event(
         tool_call_name: tool_call_name.into(),
         parent_message_id,
         base: base_fields(timestamp, raw_event),
+        attributable: AttributableFields::default(),
     })
 }
 
@@ -157,6 +121,7 @@ pub fn create_tool_call_args_event(
         tool_call_id: tool_call_id.into(),
         delta: delta.into(),
         base: base_fields(timestamp, raw_event),
+        attributable: AttributableFields::default(),
     })
 }
 
@@ -169,6 +134,7 @@ pub fn create_tool_call_end_event(
     Event::ToolCallEnd(ToolCallEndEvent {
         tool_call_id: tool_call_id.into(),
         base: base_fields(timestamp, raw_event),
+        attributable: AttributableFields::default(),
     })
 }
 
@@ -187,6 +153,7 @@ pub fn create_tool_call_chunk_event(
         parent_message_id,
         delta,
         base: base_fields(timestamp, raw_event),
+        attributable: AttributableFields::default(),
     })
 }
 
@@ -194,7 +161,7 @@ pub fn create_tool_call_chunk_event(
 pub fn create_tool_call_result_event(
     message_id: impl Into<String>,
     tool_call_id: impl Into<String>,
-    content: impl Into<String>,
+    content: impl Into<ToolResultContent>,
     role: Option<ToolResultRole>,
     timestamp: Option<i64>,
     raw_event: Option<Value>,
@@ -205,29 +172,7 @@ pub fn create_tool_call_result_event(
         content: content.into(),
         role,
         base: base_fields(timestamp, raw_event),
-    })
-}
-
-/// Creates a thinking start event.
-// legacy: THINKING_* is upstream-deprecated but must still pass through for old streams.
-#[allow(deprecated)]
-pub fn create_thinking_start_event(
-    title: Option<String>,
-    timestamp: Option<i64>,
-    raw_event: Option<Value>,
-) -> Event {
-    Event::ThinkingStart(ThinkingStartEvent {
-        title,
-        base: base_fields(timestamp, raw_event),
-    })
-}
-
-/// Creates a thinking end event.
-// legacy: THINKING_* is upstream-deprecated but must still pass through for old streams.
-#[allow(deprecated)]
-pub fn create_thinking_end_event(timestamp: Option<i64>, raw_event: Option<Value>) -> Event {
-    Event::ThinkingEnd(ThinkingEndEvent {
-        base: base_fields(timestamp, raw_event),
+        attributable: AttributableFields::default(),
     })
 }
 
@@ -240,6 +185,7 @@ pub fn create_state_snapshot_event(
     Event::StateSnapshot(StateSnapshotEvent {
         snapshot,
         base: base_fields(timestamp, raw_event),
+        attributable: AttributableFields::default(),
     })
 }
 
@@ -252,6 +198,7 @@ pub fn create_state_delta_event(
     Event::StateDelta(StateDeltaEvent {
         delta,
         base: base_fields(timestamp, raw_event),
+        attributable: AttributableFields::default(),
     })
 }
 
@@ -280,8 +227,9 @@ pub fn create_activity_snapshot_event(
         message_id: message_id.into(),
         activity_type: activity_type.into(),
         content,
-        replace: replace.unwrap_or(true),
+        replace,
         base: base_fields(timestamp, raw_event),
+        attributable: AttributableFields::default(),
     })
 }
 
@@ -298,6 +246,7 @@ pub fn create_activity_delta_event(
         activity_type: activity_type.into(),
         patch,
         base: base_fields(timestamp, raw_event),
+        attributable: AttributableFields::default(),
     })
 }
 
@@ -312,6 +261,7 @@ pub fn create_raw_event(
         event,
         source,
         base: base_fields(timestamp, raw_event),
+        attributable: AttributableFields::default(),
     })
 }
 
@@ -326,6 +276,7 @@ pub fn create_custom_event(
         name: name.into(),
         value,
         base: base_fields(timestamp, raw_event),
+        attributable: AttributableFields::default(),
     })
 }
 
@@ -341,6 +292,7 @@ pub fn create_run_started_event(
     Event::RunStarted(RunStartedEvent {
         thread_id: thread_id.into(),
         run_id: run_id.into(),
+        protocol_version: None,
         parent_run_id,
         input,
         base: base_fields(timestamp, raw_event),
@@ -378,7 +330,9 @@ pub fn create_run_finished_success_event(
         thread_id,
         run_id,
         result,
-        Some(RunFinishedOutcome::Success),
+        Some(RunFinishedOutcome::Success {
+            pending_tool_call_ids: None,
+        }),
         timestamp,
         raw_event,
     )
@@ -427,6 +381,7 @@ pub fn create_step_started_event(
     Event::StepStarted(StepStartedEvent {
         step_name: step_name.into(),
         base: base_fields(timestamp, raw_event),
+        attributable: AttributableFields::default(),
     })
 }
 
@@ -439,6 +394,7 @@ pub fn create_step_finished_event(
     Event::StepFinished(StepFinishedEvent {
         step_name: step_name.into(),
         base: base_fields(timestamp, raw_event),
+        attributable: AttributableFields::default(),
     })
 }
 
@@ -451,6 +407,7 @@ pub fn create_reasoning_start_event(
     Event::ReasoningStart(ReasoningStartEvent {
         message_id: message_id.into(),
         base: base_fields(timestamp, raw_event),
+        attributable: AttributableFields::default(),
     })
 }
 
@@ -465,6 +422,7 @@ pub fn create_reasoning_message_start_event(
         message_id: message_id.into(),
         role: role.unwrap_or(ReasoningMessageRole::Reasoning),
         base: base_fields(timestamp, raw_event),
+        attributable: AttributableFields::default(),
     })
 }
 
@@ -479,6 +437,7 @@ pub fn create_reasoning_message_content_event(
         message_id: message_id.into(),
         delta: delta.into(),
         base: base_fields(timestamp, raw_event),
+        attributable: AttributableFields::default(),
     })
 }
 
@@ -491,6 +450,7 @@ pub fn create_reasoning_message_end_event(
     Event::ReasoningMessageEnd(ReasoningMessageEndEvent {
         message_id: message_id.into(),
         base: base_fields(timestamp, raw_event),
+        attributable: AttributableFields::default(),
     })
 }
 
@@ -505,6 +465,7 @@ pub fn create_reasoning_message_chunk_event(
         message_id,
         delta,
         base: base_fields(timestamp, raw_event),
+        attributable: AttributableFields::default(),
     })
 }
 
@@ -517,6 +478,7 @@ pub fn create_reasoning_end_event(
     Event::ReasoningEnd(ReasoningEndEvent {
         message_id: message_id.into(),
         base: base_fields(timestamp, raw_event),
+        attributable: AttributableFields::default(),
     })
 }
 
@@ -533,17 +495,16 @@ pub fn create_reasoning_encrypted_value_event(
         entity_id: entity_id.into(),
         encrypted_value: encrypted_value.into(),
         base: base_fields(timestamp, raw_event),
+        attributable: AttributableFields::default(),
     })
 }
 
 #[cfg(test)]
-// legacy: THINKING_* is upstream-deprecated but must still pass through for old streams.
-#[allow(deprecated)]
 mod factories_tests {
     use super::*;
     use crate::events::EventType;
     use crate::types::{
-        AssistantMessage, BinaryInputContent, InputContent, UserMessage, UserMessageContent,
+        AssistantMessage, ContentPart, PartSource, UserMessage, UserMessageContent,
     };
     use serde_json::json;
 
@@ -595,24 +556,6 @@ mod factories_tests {
         EventType::TextMessageChunk
     );
     factory_test!(
-        create_thinking_text_message_start_event_builds_variant,
-        create_thinking_text_message_start_event(None, None),
-        Event::ThinkingTextMessageStart(_),
-        EventType::ThinkingTextMessageStart
-    );
-    factory_test!(
-        create_thinking_text_message_content_event_builds_variant,
-        create_thinking_text_message_content_event("thinking", None, None),
-        Event::ThinkingTextMessageContent(_),
-        EventType::ThinkingTextMessageContent
-    );
-    factory_test!(
-        create_thinking_text_message_end_event_builds_variant,
-        create_thinking_text_message_end_event(None, None),
-        Event::ThinkingTextMessageEnd(_),
-        EventType::ThinkingTextMessageEnd
-    );
-    factory_test!(
         create_tool_call_start_event_builds_variant,
         create_tool_call_start_event("tc1", "search", Some("m1".into()), None, None),
         Event::ToolCallStart(_),
@@ -650,18 +593,6 @@ mod factories_tests {
         EventType::ToolCallResult
     );
     factory_test!(
-        create_thinking_start_event_builds_variant,
-        create_thinking_start_event(Some("plan".into()), None, None),
-        Event::ThinkingStart(_),
-        EventType::ThinkingStart
-    );
-    factory_test!(
-        create_thinking_end_event_builds_variant,
-        create_thinking_end_event(None, None),
-        Event::ThinkingEnd(_),
-        EventType::ThinkingEnd
-    );
-    factory_test!(
         create_state_snapshot_event_builds_variant,
         create_state_snapshot_event(json!({"x": 1}), None, None),
         Event::StateSnapshot(_),
@@ -685,7 +616,9 @@ mod factories_tests {
                 content: Some("hello".into()),
                 name: None,
                 tool_calls: None,
-                encrypted_value: None
+                encrypted_value: None,
+                subagent_run_id: None,
+                metadata: None
             })],
             None,
             None
@@ -760,6 +693,7 @@ mod factories_tests {
             "r1",
             None,
             vec![Interrupt {
+                subagent_run_id: None,
                 id: "i1".into(),
                 reason: "approval".into(),
                 message: None,
@@ -854,7 +788,7 @@ mod factories_tests {
     }
 
     #[test]
-    fn create_activity_snapshot_event_defaults_replace_true() {
+    fn create_activity_snapshot_event_leaves_replace_absent_by_default() {
         let event = create_activity_snapshot_event(
             "a1",
             "plan",
@@ -865,7 +799,7 @@ mod factories_tests {
         );
         match event {
             Event::ActivitySnapshot(event) => {
-                assert!(event.replace);
+                assert_eq!(event.replace, None);
                 assert_eq!(event.base.timestamp, Some(42));
             }
             _ => panic!("expected activity snapshot"),
@@ -877,7 +811,12 @@ mod factories_tests {
         let event = create_run_finished_success_event("t1", "r1", None, Some(42), None);
         match event {
             Event::RunFinished(event) => {
-                assert_eq!(event.outcome, Some(RunFinishedOutcome::Success));
+                assert_eq!(
+                    event.outcome,
+                    Some(RunFinishedOutcome::Success {
+                        pending_tool_call_ids: None
+                    })
+                );
                 assert_eq!(event.base.timestamp, Some(42));
             }
             _ => panic!("expected run finished"),
@@ -891,6 +830,7 @@ mod factories_tests {
             "r1",
             None,
             vec![Interrupt {
+                subagent_run_id: None,
                 id: "i1".into(),
                 reason: "approval".into(),
                 message: None,
@@ -915,21 +855,23 @@ mod factories_tests {
     }
 
     #[test]
-    fn create_messages_snapshot_event_accepts_binary_parts() {
+    fn create_messages_snapshot_event_accepts_media_parts() {
         let event = create_messages_snapshot_event(
             vec![Message::User(UserMessage {
                 id: "u1".into(),
-                content: UserMessageContent::Parts(vec![InputContent::Binary {
-                    content: BinaryInputContent {
-                        mime_type: "application/octet-stream".into(),
-                        id: Some("blob-1".into()),
-                        url: None,
-                        data: None,
-                        filename: None,
+                content: UserMessageContent::Parts(vec![ContentPart::Image {
+                    id: None,
+                    source: PartSource::File {
+                        value: "file-1".into(),
+                        provider: None,
+                        mime_type: None,
                     },
+                    metadata: None,
                 }]),
                 name: None,
                 encrypted_value: None,
+                subagent_run_id: None,
+                metadata: None,
             })],
             Some(42),
             None,

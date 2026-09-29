@@ -10,10 +10,10 @@
 
 | Tracked             | Value                                                         |
 | ------------------- | ------------------------------------------------------------- |
-| TS package versions | `@ag-ui/core` / `@ag-ui/client` / `@ag-ui/encoder` **0.0.57** |
-| Monorepo commit     | `27e5593a8ba4e372ec009f17ca61b76715d356c4` (2026-08-07)       |
+| TS package versions | `@ag-ui/core` / `@ag-ui/client` / `@ag-ui/encoder` **1.0.0** |
+| Monorepo commit     | `024332cbb71e03e6a6bc055bed5af9c5c504471a` (2026-09-28)       |
 | Local checkout      | `../ag-ui`                                                    |
-| Audited             | 2026-08-07                                                    |
+| Audited             | 2026-09-28                                                    |
 
 This SDK aligns all protocol types, events, wire format, and runtime behaviour
 to that reference. Rust-specific ergonomics are layered on top **without
@@ -25,16 +25,16 @@ Audited `core/src/types.ts` and `core/src/events.ts` field-by-field.
 
 | TS construct                                                        | Rust                                           | Status                                        |
 | ------------------------------------------------------------------- | ---------------------------------------------- | --------------------------------------------- |
-| `EventType` (33 active + 5 deprecated `THINKING_*`)                 | `events::EventType`                            | ✅ identical set + wire names                  |
+| `EventType` (31 active)                                            | `events::EventType`                            | ✅ identical set + wire names                  |
 | `Event` discriminated union (`type` tag)                            | `events::Event` (`#[serde(tag = "type")]`)     | ✅ identical                                   |
 | `Message` (developer/system/assistant/user/tool/activity/reasoning) | `types::Message`                               | ✅ identical                                   |
 | `Role` (7 roles) / `TextMessageRole` (4 roles, default assistant)   | `types::Role` / `TextMessageRole`              | ✅ identical                                   |
 | `ToolCall` / `FunctionCall`                                         | `types::ToolCall` / `FunctionCall`             | ✅ identical                                   |
-| `InputContent` (text/image/audio/video/document + legacy binary)    | `types::InputContent`                          | ✅ identical (incl. binary payload validation) |
+| `ContentPart` (text/image/audio/video/document) + `PartSource`     | `types::ContentPart` / `types::PartSource`     | ✅ identical (renamed from `InputContent`; `Binary` variant dropped) |
 | `RunAgentInput` (+ optional `resume`)                               | `types::RunAgentInput`                         | ✅ identical                                   |
 | `Interrupt` / `ResumeEntry` / `ResumeStatus`                        | `types::*`                                     | ✅ identical                                   |
 | `State = any`                                                       | `type State = serde_json::Value`               | ✅ aligned (untyped, per canonical)            |
-| `RunFinishedOutcome` (success / interrupt)                          | `events::RunFinishedOutcome`                   | ✅ identical                                   |
+| `RunFinishedOutcome` (success / interrupt / cancelled)              | `events::RunFinishedOutcome`                   | ✅ identical (2026-09-28)                      |
 | `AgentCapabilities` (identity/transport/tools/output/state/multiAgent/reasoning/multimodal/execution/humanInTheLoop/custom) | `capabilities::AgentCapabilities` | ✅ realigned to canonical (2026-05-30) |
 | `AGUIError` / `AGUIConnectNotImplementedError`                      | `error::AgUiError` (+ `ConnectNotImplemented`) | ✅ aligned                                     |
 
@@ -48,9 +48,9 @@ kebab subtype, etc.).
 | ------------------------------------------------------- | --------------------------- | --------------------------------------------- |
 | SSE media type `text/event-stream`                      | `AGUI_MEDIA_TYPE_SSE`       | ✅                                             |
 | Protobuf media type `application/vnd.ag-ui.event+proto` | `AGUI_MEDIA_TYPE_PROTOBUF`  | ✅ constant                                    |
-| `EventEncoder` content negotiation                      | `EventEncoder::with_accept` | ✅ behaviourally aligned                       |
+| `EventEncoder` content negotiation                      | `EventEncoder::with_accept` | ✅ behaviourally aligned; rewritten to mirror `media-type.ts` (2026-09-28) — `*/*` and `application/*` now select protobuf, `q=0` vetoes, specificity outranks `q` |
 | `EventEncoder.encodeProtobuf` (4-byte BE length prefix) | `EventEncoder::encode_protobuf` | ✅ aligned (2026-05-30)                     |
-| protobuf encode/decode                                  | `agui-rs-proto`             | ✅ aligned (2026-05-30); reasoning/activity/thinking rejected with `Unsupported` (not in `events.proto`) |
+| protobuf encode/decode                                  | `agui-rs-proto`             | ✅ aligned (2026-09-28); full 1.0 schema (31 events), mechanically drift-checked against the vendored `upstream-spec/` `.proto` files |
 
 ## 3. Client (`@ag-ui/client` → `agui-rs-client`)
 
@@ -64,9 +64,9 @@ kebab subtype, etc.).
 | `AbstractAgent.clone()`                                                          | `AgentRunner::clone_runner`                                | ✅ aligned (2026-05-30)                                     |
 | `AbstractAgent.connect()` / `connectAgent()`                                     | `Agent::connect` + `AgentRunner::connect_agent`            | ✅ aligned (2026-05-30)                                     |
 | `getCapabilities()`                                                              | `Agent::capabilities` + `AgentRunner::capabilities`        | ✅ aligned (2026-05-30)                                     |
-| `maxVersion` + version-gated middleware auto-insertion                           | `AgentRunner::with_max_version`                            | ✅ aligned (2026-05-30)                                     |
+| `maxVersion` + version-gated middleware auto-insertion                           | —                                                | ❌ removed 2026-09-28 (upstream 1.0 has no `maxVersion`) |
 | `Middleware` / `FunctionMiddleware`                                              | `middleware::{Middleware, MiddlewareChain}`                | ✅                                                          |
-| `BackwardCompatibility_0_0_{39,45,47}`                                           | `middleware::backward_compat::*`                           | ✅ logic + auto-insertion (2026-05-30)                      |
+| `BackwardCompatibility_0_0_{39,45,47}`                                           | —                                                | ❌ removed 2026-09-28 (upstream 1.0 has none; the 0.0.45 THINKING→REASONING rewrite is now a permanent raw-JSON boundary in `client/src/compat.rs`) |
 | `FilterToolCallsMiddleware`                                                      | `middleware::filter_tool_calls`                            | ✅                                                          |
 | `HttpAgent` (SSE)                                                                | `http::HttpAgent`                                          | ✅                                                          |
 | `HttpAgentConfig.fetch` custom fetch                                             | `HttpAgentConfig::request_executor`                        | ✅ (Rust shape)                                             |
@@ -74,10 +74,14 @@ kebab subtype, etc.).
 | **`AbstractAgent.pendingInterrupts` + resume enforcement**                       | `AgentRunner::pending_interrupts` + `ensure_resume_covers` | ✅ aligned (2026-05-30)                                     |
 | `convertToLegacyEvents`                                                          | `legacy::convert_legacy_events`                            | ✅                                                          |
 | `compactEvents`                                                                  | `compact::compact_events`                                  | ✅ text/tool/state only — reasoning passes through, mirroring TS (2026-05-31)    |
-| `@ag-ui/proto` encode/decode                                                     | `agui-rs-proto` + `EventEncoder::encode_protobuf` + `parse_proto_stream` | ✅ aligned (2026-05-30); reasoning/activity/thinking not in proto schema |
+| `@ag-ui/proto` encode/decode                                                     | `agui-rs-proto` + `EventEncoder::encode_protobuf` + `parse_proto_stream` | ✅ aligned (2026-09-28); full 1.0 schema, drift-checked against vendored `upstream-spec/` |
 | `DebugLogger`                                                                    | `debug_logger::DebugLogger` + `AgentConfig::debug`         | ✅ lifecycle logging (2026-05-30); ⚠️ per-stream-stage logging not wired |
 
 ### Behavioural gap closed this round — `pendingInterrupts`
+
+> The two round-notes below are historical (2026-05-30/31) and predate the
+> 0.2.0 migration: `with_max_version` and the backward-compat middleware they
+> reference were removed in 2026-09-28.
 
 TS `AbstractAgent` tracks interrupts emitted by `RUN_FINISHED`
 (`outcome.type === "interrupt"`) in `pendingInterrupts`, and on the next
@@ -151,7 +155,7 @@ architectural or JS-runtime-specific. None affect wire behaviour.
 | Subscriber `stopPropagation` + `AgentStateMutation` model  | Rust subscriber hooks return `Result`/`Option<replacement>`, not mutation objects. Multi-subscriber registry, ordering, and replacement chaining are implemented; the JS mutation-object + `stopPropagation` contract is intentionally not adopted (would re-shape all 45 hooks with no wire impact). |
 | `events$` replay subject / `detachActiveRun`               | RxJS `ReplaySubject` and background-run detachment have no `futures::Stream` analogue; cancellation is covered by `AbortHandle`. |
 | Per-stream-stage `DebugLogger` logging (`[VERIFY]`/`[SSE]`/`[TRANSFORM]`/`[CHUNK]`) | Pure stream functions take no logger param; lifecycle logging is done at the runner (`AgentConfig::debug`). Stage logging would use `tracing` if needed. |
-| protobuf reasoning/activity/thinking events                | Not part of the canonical `events.proto` schema (18 variants); `encode` rejects them with `Unsupported`, matching upstream coverage. |
+| protobuf event coverage                                                       | Now complete: the 1.0 `events.proto` covers all 31 events. Previously (0.0.5x audit) reasoning/activity/thinking were outside the schema and `encode` rejected them. |
 | JS-runtime-only cases                                      | Frozen-input dev checks, `process` global, ESM interop — not modelled in Rust. |
 
 ## 5. Rust-only additions (supersets, do not affect TS parity)

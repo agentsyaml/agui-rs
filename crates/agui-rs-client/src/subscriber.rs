@@ -1,6 +1,4 @@
-use agui_rs_core::types::ActivityMessage;
-// legacy: THINKING_* is upstream-deprecated but must still pass through for old streams.
-#[allow(deprecated)]
+use agui_rs_core::types::{ActivityMessage, ToolResultContent};
 use agui_rs_core::{
     ActivityDeltaEvent, ActivitySnapshotEvent, AgUiError, CustomEvent, Event, Interrupt, Message,
     MessagesSnapshotEvent, RawEvent, ReasoningEncryptedValueEvent, ReasoningEndEvent,
@@ -8,9 +6,8 @@ use agui_rs_core::{
     ReasoningMessageStartEvent, ReasoningStartEvent, RunErrorEvent, RunFinishedEvent,
     RunFinishedOutcome, RunStartedEvent, State, StateDeltaEvent, StateSnapshotEvent,
     StepFinishedEvent, StepStartedEvent, TextMessageChunkEvent, TextMessageContentEvent,
-    TextMessageEndEvent, TextMessageStartEvent, ThinkingEndEvent, ThinkingStartEvent, ToolCall,
-    ToolCallArgsEvent, ToolCallChunkEvent, ToolCallEndEvent, ToolCallResultEvent,
-    ToolCallStartEvent,
+    TextMessageEndEvent, TextMessageStartEvent, ToolCall, ToolCallArgsEvent, ToolCallChunkEvent,
+    ToolCallEndEvent, ToolCallResultEvent, ToolCallStartEvent,
 };
 use async_trait::async_trait;
 
@@ -163,7 +160,13 @@ pub trait AgentSubscriber: Send + Sync {
 
     async fn on_tool_call_end(&self, _ctx: &RunContext, _tool_call_id: &str) {}
 
-    async fn on_tool_call_result(&self, _ctx: &RunContext, _tool_call_id: &str, _content: &str) {}
+    async fn on_tool_call_result(
+        &self,
+        _ctx: &RunContext,
+        _tool_call_id: &str,
+        _content: &ToolResultContent,
+    ) {
+    }
 
     async fn on_run_started_event(
         &self,
@@ -315,24 +318,6 @@ pub trait AgentSubscriber: Send + Sync {
     async fn on_reasoning_encrypted_value(
         &self,
         _ctx: &EventContext<'_, ReasoningEncryptedValueEvent>,
-    ) -> std::result::Result<(), AgUiError> {
-        std::result::Result::Ok(())
-    }
-
-    // legacy: THINKING_* is upstream-deprecated but must still pass through for old streams.
-    #[allow(deprecated)]
-    async fn on_thinking_start(
-        &self,
-        _ctx: &EventContext<'_, ThinkingStartEvent>,
-    ) -> std::result::Result<(), AgUiError> {
-        std::result::Result::Ok(())
-    }
-
-    // legacy: THINKING_* is upstream-deprecated but must still pass through for old streams.
-    #[allow(deprecated)]
-    async fn on_thinking_end(
-        &self,
-        _ctx: &EventContext<'_, ThinkingEndEvent>,
     ) -> std::result::Result<(), AgUiError> {
         std::result::Result::Ok(())
     }
@@ -501,13 +486,6 @@ macro_rules! impl_composite_subscriber {
     };
 }
 
-// legacy: THINKING_* is upstream-deprecated but must still pass through for old streams.
-#[allow(deprecated)]
-type ThinkingStartCtx<'a> = EventContext<'a, ThinkingStartEvent>;
-// legacy: THINKING_* is upstream-deprecated but must still pass through for old streams.
-#[allow(deprecated)]
-type ThinkingEndCtx<'a> = EventContext<'a, ThinkingEndEvent>;
-
 impl_composite_subscriber! {
     unit: [
         on_run_initialized(ctx: &RunContext),
@@ -524,7 +502,7 @@ impl_composite_subscriber! {
         on_tool_call_start(ctx: &RunContext, tool_call_id: &str, tool_call_name: &str),
         on_tool_call_args(ctx: &RunContext, tool_call_id: &str, delta: &str),
         on_tool_call_end(ctx: &RunContext, tool_call_id: &str),
-        on_tool_call_result(ctx: &RunContext, tool_call_id: &str, content: &str),
+        on_tool_call_result(ctx: &RunContext, tool_call_id: &str, content: &ToolResultContent),
     ],
     try: [
         on_run_started_event(EventContext<'_, RunStartedEvent>),
@@ -549,8 +527,6 @@ impl_composite_subscriber! {
         on_reasoning_chunk(EventContext<'_, ReasoningMessageChunkEvent>),
         on_reasoning_finished(EventContext<'_, ReasoningEndEvent>),
         on_reasoning_encrypted_value(EventContext<'_, ReasoningEncryptedValueEvent>),
-        on_thinking_start(ThinkingStartCtx<'_>),
-        on_thinking_end(ThinkingEndCtx<'_>),
         on_state_snapshot(EventContext<'_, StateSnapshotEvent>),
         on_state_delta(EventContext<'_, StateDeltaEvent>),
         on_messages_snapshot(EventContext<'_, MessagesSnapshotEvent>),
@@ -564,11 +540,10 @@ impl_composite_subscriber! {
 }
 
 #[cfg(test)]
-// legacy: THINKING_* is upstream-deprecated but must still pass through for old streams.
-#[allow(deprecated)]
 mod subscriber_tests {
     use super::*;
     use agui_rs_core::types::AssistantMessage;
+    use agui_rs_core::AttributableFields;
     use agui_rs_core::{
         BaseEventFields, FunctionCall, ReasoningMessageRole, RunFinishedOutcome, TextMessageRole,
         ToolCallKind,
@@ -592,6 +567,8 @@ mod subscriber_tests {
     ) -> Message {
         Message::Assistant(AssistantMessage {
             id: id.into(),
+            metadata: None,
+            subagent_run_id: None,
             content: content.map(str::to_owned),
             name: None,
             tool_calls,
@@ -602,6 +579,7 @@ mod subscriber_tests {
     fn tool_call() -> ToolCall {
         ToolCall {
             id: "call-1".into(),
+            metadata: None,
             kind: ToolCallKind::Function,
             function: FunctionCall {
                 name: "search".into(),
@@ -618,6 +596,7 @@ mod subscriber_tests {
             parent_run_id: None,
             input: None,
             base: BaseEventFields::default(),
+            protocol_version: None,
         }
     }
 
@@ -626,7 +605,9 @@ mod subscriber_tests {
             thread_id: "thread-1".into(),
             run_id: "run-1".into(),
             result: Some(json!({"ok": true})),
-            outcome: Some(RunFinishedOutcome::Success),
+            outcome: Some(RunFinishedOutcome::Success {
+                pending_tool_call_ids: None,
+            }),
             usage: Vec::new(),
             base: BaseEventFields::default(),
         }
@@ -645,6 +626,7 @@ mod subscriber_tests {
         StepStartedEvent {
             step_name: "plan".into(),
             base: BaseEventFields::default(),
+            attributable: AttributableFields::default(),
         }
     }
 
@@ -652,6 +634,7 @@ mod subscriber_tests {
         StepFinishedEvent {
             step_name: "plan".into(),
             base: BaseEventFields::default(),
+            attributable: AttributableFields::default(),
         }
     }
 
@@ -659,6 +642,7 @@ mod subscriber_tests {
         TextMessageStartEvent {
             message_id: "msg-1".into(),
             role: TextMessageRole::Assistant,
+            attributable: AttributableFields::default(),
             name: None,
             base: BaseEventFields::default(),
         }
@@ -669,6 +653,7 @@ mod subscriber_tests {
             message_id: "msg-1".into(),
             delta: " world".into(),
             base: BaseEventFields::default(),
+            attributable: AttributableFields::default(),
         }
     }
 
@@ -676,6 +661,7 @@ mod subscriber_tests {
         TextMessageEndEvent {
             message_id: "msg-1".into(),
             base: BaseEventFields::default(),
+            attributable: AttributableFields::default(),
         }
     }
 
@@ -683,6 +669,7 @@ mod subscriber_tests {
         TextMessageChunkEvent {
             message_id: Some("msg-1".into()),
             role: Some(TextMessageRole::Assistant),
+            attributable: AttributableFields::default(),
             delta: Some(" world".into()),
             name: None,
             base: BaseEventFields::default(),
@@ -695,6 +682,7 @@ mod subscriber_tests {
             tool_call_name: "search".into(),
             parent_message_id: None,
             base: BaseEventFields::default(),
+            attributable: AttributableFields::default(),
         }
     }
 
@@ -703,6 +691,7 @@ mod subscriber_tests {
             tool_call_id: "call-1".into(),
             delta: "{\"q\":\"ru".into(),
             base: BaseEventFields::default(),
+            attributable: AttributableFields::default(),
         }
     }
 
@@ -710,6 +699,7 @@ mod subscriber_tests {
         ToolCallEndEvent {
             tool_call_id: "call-1".into(),
             base: BaseEventFields::default(),
+            attributable: AttributableFields::default(),
         }
     }
 
@@ -720,6 +710,7 @@ mod subscriber_tests {
             parent_message_id: None,
             delta: Some("st\"}".into()),
             base: BaseEventFields::default(),
+            attributable: AttributableFields::default(),
         }
     }
 
@@ -728,6 +719,7 @@ mod subscriber_tests {
             message_id: "tool-msg-1".into(),
             tool_call_id: "call-1".into(),
             content: "done".into(),
+            attributable: AttributableFields::default(),
             role: None,
             base: BaseEventFields::default(),
         }
@@ -737,6 +729,7 @@ mod subscriber_tests {
         ReasoningStartEvent {
             message_id: "reason-1".into(),
             base: BaseEventFields::default(),
+            attributable: AttributableFields::default(),
         }
     }
 
@@ -744,6 +737,7 @@ mod subscriber_tests {
         ReasoningMessageStartEvent {
             message_id: "reason-1".into(),
             role: ReasoningMessageRole::Reasoning,
+            attributable: AttributableFields::default(),
             base: BaseEventFields::default(),
         }
     }
@@ -753,6 +747,7 @@ mod subscriber_tests {
             message_id: "reason-1".into(),
             delta: "think".into(),
             base: BaseEventFields::default(),
+            attributable: AttributableFields::default(),
         }
     }
 
@@ -760,6 +755,7 @@ mod subscriber_tests {
         ReasoningMessageEndEvent {
             message_id: "reason-1".into(),
             base: BaseEventFields::default(),
+            attributable: AttributableFields::default(),
         }
     }
 
@@ -768,6 +764,7 @@ mod subscriber_tests {
             message_id: Some("reason-1".into()),
             delta: Some("ink".into()),
             base: BaseEventFields::default(),
+            attributable: AttributableFields::default(),
         }
     }
 
@@ -775,6 +772,7 @@ mod subscriber_tests {
         ReasoningEndEvent {
             message_id: "reason-1".into(),
             base: BaseEventFields::default(),
+            attributable: AttributableFields::default(),
         }
     }
 
@@ -783,19 +781,7 @@ mod subscriber_tests {
             subtype: agui_rs_core::ReasoningEncryptedValueSubtype::Message,
             entity_id: "reason-1".into(),
             encrypted_value: "enc".into(),
-            base: BaseEventFields::default(),
-        }
-    }
-
-    fn thinking_start_event() -> ThinkingStartEvent {
-        ThinkingStartEvent {
-            title: Some("plan".into()),
-            base: BaseEventFields::default(),
-        }
-    }
-
-    fn thinking_end_event() -> ThinkingEndEvent {
-        ThinkingEndEvent {
+            attributable: AttributableFields::default(),
             base: BaseEventFields::default(),
         }
     }
@@ -804,6 +790,7 @@ mod subscriber_tests {
         StateSnapshotEvent {
             snapshot: json!({"count": 2}),
             base: BaseEventFields::default(),
+            attributable: AttributableFields::default(),
         }
     }
 
@@ -811,6 +798,7 @@ mod subscriber_tests {
         StateDeltaEvent {
             delta: vec![json!({"op": "replace", "path": "/count", "value": 2})],
             base: BaseEventFields::default(),
+            attributable: AttributableFields::default(),
         }
     }
 
@@ -826,7 +814,8 @@ mod subscriber_tests {
             message_id: "activity-1".into(),
             activity_type: "plan".into(),
             content: serde_json::Map::new(),
-            replace: true,
+            attributable: AttributableFields::default(),
+            replace: Some(true),
             base: BaseEventFields::default(),
         }
     }
@@ -837,12 +826,15 @@ mod subscriber_tests {
             activity_type: "plan".into(),
             patch: vec![json!({"op": "add", "path": "/steps/0", "value": "x"})],
             base: BaseEventFields::default(),
+            attributable: AttributableFields::default(),
         }
     }
 
     fn activity_message() -> ActivityMessage {
         ActivityMessage {
             id: "activity-1".into(),
+            metadata: None,
+            subagent_run_id: None,
             activity_type: "plan".into(),
             content: serde_json::Map::new(),
         }
@@ -853,6 +845,7 @@ mod subscriber_tests {
             event: json!({"provider": "openai"}),
             source: Some("openai".into()),
             base: BaseEventFields::default(),
+            attributable: AttributableFields::default(),
         }
     }
 
@@ -861,12 +854,14 @@ mod subscriber_tests {
             name: "custom".into(),
             value: json!({"ok": true}),
             base: BaseEventFields::default(),
+            attributable: AttributableFields::default(),
         }
     }
 
     fn interrupt() -> Interrupt {
         Interrupt {
             id: "interrupt-1".into(),
+            subagent_run_id: None,
             reason: "needs_human".into(),
             message: None,
             tool_call_id: None,
@@ -1181,8 +1176,6 @@ mod subscriber_tests {
     async fn default_state_activity_and_misc_hooks_return_ok() {
         let subscriber = DefaultSubscriber;
         let run = run_context();
-        let thinking_start = thinking_start_event();
-        let thinking_end = thinking_end_event();
         let state_snapshot = state_snapshot_event();
         let state_delta = state_delta_event();
         let messages_snapshot = messages_snapshot_event();
@@ -1198,20 +1191,6 @@ mod subscriber_tests {
         };
         let activity = activity_message();
 
-        assert!(subscriber
-            .on_thinking_start(&EventContext {
-                run: &run,
-                event: &thinking_start,
-            })
-            .await
-            .is_ok());
-        assert!(subscriber
-            .on_thinking_end(&EventContext {
-                run: &run,
-                event: &thinking_end,
-            })
-            .await
-            .is_ok());
         assert!(subscriber
             .on_state_snapshot(&EventContext {
                 run: &run,

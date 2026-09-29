@@ -78,8 +78,11 @@ async fn send_backend_tool_call(emitter: &EventEmitter, run_id: &str, history: V
                 arguments: json!({"city": "San Francisco"}).to_string(),
             },
             encrypted_value: None,
+            metadata: None,
         }]),
         encrypted_value: None,
+        subagent_run_id: None,
+        metadata: None,
     });
 
     let tool_result = Message::Tool(ToolMessage {
@@ -91,10 +94,13 @@ async fn send_backend_tool_call(emitter: &EventEmitter, run_id: &str, history: V
             "temperature": "20",
             "humidity": "60"
         })
-        .to_string(),
+        .to_string()
+        .into(),
         tool_call_id,
         error: None,
         encrypted_value: None,
+        subagent_run_id: None,
+        metadata: None,
     });
 
     let mut all = history;

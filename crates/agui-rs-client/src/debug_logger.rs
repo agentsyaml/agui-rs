@@ -96,6 +96,7 @@ mod debug_logger_tests {
             parent_run_id: None,
             input: None,
             base: BaseEventFields::default(),
+            protocol_version: None,
         })
     }
 

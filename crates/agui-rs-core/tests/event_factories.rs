@@ -1,11 +1,8 @@
-// legacy: THINKING_* is upstream-deprecated but must still pass through for old streams.
-#![allow(deprecated)]
-
 use agui_rs_core::event_factories as factory;
 use agui_rs_core::types::{Interrupt, Message, RunAgentInput};
 use agui_rs_core::{
     Event, ReasoningEncryptedValueSubtype, ReasoningMessageRole, RunFinishedOutcome,
-    TextMessageRole, ToolResultRole,
+    TextMessageRole, ToolResultContent, ToolResultRole,
 };
 use serde_json::json;
 
@@ -60,14 +57,7 @@ fn text_message_factories_cover_roles_names_and_optional_fields() {
 }
 
 #[test]
-fn thinking_message_and_reasoning_factories_build_expected_variants() {
-    let thinking_start =
-        factory::create_thinking_start_event(Some("working".into()), Some(21), None);
-    let thinking_text_start = factory::create_thinking_text_message_start_event(Some(22), None);
-    let thinking_text_content =
-        factory::create_thinking_text_message_content_event("thinking…", Some(23), None);
-    let thinking_text_end = factory::create_thinking_text_message_end_event(Some(24), None);
-    let thinking_end = factory::create_thinking_end_event(Some(25), None);
+fn reasoning_factories_build_expected_variants() {
     let reasoning_start = factory::create_reasoning_start_event("r1", Some(26), None);
     let reasoning_message_start = factory::create_reasoning_message_start_event(
         "r1",
@@ -93,21 +83,6 @@ fn thinking_message_and_reasoning_factories_build_expected_variants() {
         None,
     );
 
-    assert!(
-        matches!(thinking_start, Event::ThinkingStart(ref event) if event.title.as_deref() == Some("working"))
-    );
-    assert!(matches!(
-        thinking_text_start,
-        Event::ThinkingTextMessageStart(_)
-    ));
-    assert!(
-        matches!(thinking_text_content, Event::ThinkingTextMessageContent(ref event) if event.delta == "thinking…")
-    );
-    assert!(matches!(
-        thinking_text_end,
-        Event::ThinkingTextMessageEnd(_)
-    ));
-    assert!(matches!(thinking_end, Event::ThinkingEnd(_)));
     assert!(
         matches!(reasoning_start, Event::ReasoningStart(ref event) if event.message_id == "r1")
     );
@@ -166,7 +141,7 @@ fn tool_call_factories_cover_start_args_chunk_end_and_result() {
     );
     assert!(matches!(end, Event::ToolCallEnd(ref event) if event.tool_call_id == "tc-1"));
     assert!(
-        matches!(result, Event::ToolCallResult(ref event) if event.role == Some(ToolResultRole::Tool) && event.content == r#"{"ok":true}"#)
+        matches!(result, Event::ToolCallResult(ref event) if event.role == Some(ToolResultRole::Tool) && event.content == ToolResultContent::Text(r#"{"ok":true}"#.to_string()))
     );
 }
 
@@ -233,7 +208,9 @@ fn snapshot_raw_custom_run_and_step_factories_cover_public_api() {
     assert!(
         matches!(messages_snapshot, Event::MessagesSnapshot(ref event) if event.messages.len() == 2 && event.base.timestamp == Some(123))
     );
-    assert!(matches!(activity_snapshot, Event::ActivitySnapshot(ref event) if event.replace));
+    assert!(
+        matches!(activity_snapshot, Event::ActivitySnapshot(ref event) if event.replace.is_none())
+    );
     assert!(
         matches!(activity_delta, Event::ActivityDelta(ref event) if event.patch[0]["path"] == "/steps/0")
     );
@@ -261,7 +238,9 @@ fn run_finished_success_factory_sets_success_outcome() {
     );
 
     assert!(
-        matches!(event, Event::RunFinished(ref event) if event.outcome == Some(RunFinishedOutcome::Success) && event.result == Some(json!({ "ok": true })))
+        matches!(event, Event::RunFinished(ref event) if event.outcome == Some(RunFinishedOutcome::Success {
+                pending_tool_call_ids: None
+            }) && event.result == Some(json!({ "ok": true })))
     );
 }
 
@@ -272,6 +251,7 @@ fn run_finished_interrupt_factory_sets_interrupt_outcome() {
         "r-1",
         None,
         vec![Interrupt {
+            subagent_run_id: None,
             id: "int-1".into(),
             reason: "tool_call".into(),
             message: None,
@@ -295,7 +275,9 @@ fn run_finished_factory_accepts_explicit_success_and_interrupt_outcomes() {
         "t-1",
         "r-1",
         None,
-        Some(RunFinishedOutcome::Success),
+        Some(RunFinishedOutcome::Success {
+            pending_tool_call_ids: None,
+        }),
         Some(73),
         None,
     );
@@ -305,6 +287,7 @@ fn run_finished_factory_accepts_explicit_success_and_interrupt_outcomes() {
         None,
         Some(RunFinishedOutcome::Interrupt {
             interrupts: vec![Interrupt {
+                subagent_run_id: None,
                 id: "int-1".into(),
                 reason: "tool_call".into(),
                 message: None,
@@ -319,7 +302,9 @@ fn run_finished_factory_accepts_explicit_success_and_interrupt_outcomes() {
     );
 
     assert!(
-        matches!(success, Event::RunFinished(ref event) if event.outcome == Some(RunFinishedOutcome::Success))
+        matches!(success, Event::RunFinished(ref event) if event.outcome == Some(RunFinishedOutcome::Success {
+            pending_tool_call_ids: None
+        }))
     );
     assert!(
         matches!(interrupt, Event::RunFinished(ref event) if matches!(&event.outcome, Some(RunFinishedOutcome::Interrupt { interrupts }) if interrupts.len() == 1))

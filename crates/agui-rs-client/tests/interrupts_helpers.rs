@@ -12,6 +12,7 @@ use std::collections::HashMap;
 fn interrupt(id: &str, expires_at: Option<&str>) -> Interrupt {
     Interrupt {
         id: id.into(),
+        subagent_run_id: None,
         reason: "tool_call".into(),
         message: None,
         tool_call_id: None,
@@ -35,7 +36,9 @@ fn get_run_outcome_covers_legacy_success_and_interrupt_cases() {
         thread_id: "t-1".into(),
         run_id: "r-1".into(),
         result: None,
-        outcome: Some(RunFinishedOutcome::Success),
+        outcome: Some(RunFinishedOutcome::Success {
+            pending_tool_call_ids: None,
+        }),
         usage: Vec::new(),
         base: BaseEventFields::default(),
     });
@@ -57,7 +60,9 @@ fn get_run_outcome_covers_legacy_success_and_interrupt_cases() {
     );
     assert_eq!(
         get_run_outcome(&[success]),
-        agui_rs_client::interrupts::RunOutcome::Finished(Some(RunFinishedOutcome::Success))
+        agui_rs_client::interrupts::RunOutcome::Finished(Some(RunFinishedOutcome::Success {
+            pending_tool_call_ids: None,
+        }))
     );
     assert_eq!(
         get_run_outcome(&[interrupt_event]),

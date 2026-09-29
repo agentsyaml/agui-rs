@@ -9,6 +9,7 @@ use crate::subscriber::{
     ToolCallArgsContext, ToolCallEndContext, ToolCallResultContext,
 };
 use crate::verify::verify_events;
+use crate::version::{compare_versions, warn_on_producer_declaration, PROTOCOL_VERSION};
 use agui_rs_core::{
     AgUiError, Context, Event, Interrupt, Message, Result, RunAgentInput, RunFinishedOutcome,
     State, Tool, ToolCall,
@@ -180,6 +181,7 @@ pub struct AgentRunner<A: Agent + 'static> {
     now_fn: Arc<dyn Fn() -> String + Send + Sync>,
     debug_logger: Option<crate::debug_logger::DebugLogger>,
     verify: bool,
+    max_protocol_version: String,
 }
 
 /// Handle returned by [`AgentRunner::subscribe`].
@@ -232,6 +234,11 @@ impl<A: Agent + 'static> AgentRunner<A> {
             now_fn: Arc::new(default_now),
             debug_logger,
             verify: true,
+            // The ceiling is the peer protocol version, not which protocol this
+            // SDK implements — that is the generated PROTOCOL_VERSION constant.
+            // Defaults to this crate's own version, the same default upstream
+            // reads off its package.json.
+            max_protocol_version: env!("CARGO_PKG_VERSION").to_string(),
         }
     }
 
@@ -285,6 +292,7 @@ impl<A: Agent + 'static> AgentRunner<A> {
             now_fn: self.now_fn.clone(),
             debug_logger: self.debug_logger.clone(),
             verify: self.verify,
+            max_protocol_version: self.max_protocol_version.clone(),
         }
     }
 
@@ -293,36 +301,9 @@ impl<A: Agent + 'static> AgentRunner<A> {
         self
     }
 
-    /// Returns the runner's middleware chain (useful for asserting
-    /// auto-inserted backward-compat middleware).
+    /// Returns the runner's middleware chain.
     pub fn middleware_chain(&self) -> &MiddlewareChain {
         &self.middleware
-    }
-
-    /// Auto-inserts backward-compatibility middleware based on a declared
-    /// `max_version`, mirroring the TypeScript `AbstractAgent` constructor:
-    /// - `<= 0.0.39`: strips `parentRunId` and concatenates legacy multipart text
-    /// - `<= 0.0.45`: rewrites legacy `THINKING_*` events to `REASONING_*`
-    /// - `<= 0.0.47`: upgrades legacy binary input content to typed parts
-    ///
-    /// Middlewares are prepended (run before user middleware), as in TS.
-    pub fn with_max_version(mut self, max_version: &str) -> Self {
-        use crate::middleware::backward_compat::{
-            BackwardCompat0_0_39, BackwardCompat0_0_45, BackwardCompat0_0_47,
-        };
-        let mut prepended = MiddlewareChain::new();
-        if version_lte(max_version, "0.0.39") {
-            prepended.push(BackwardCompat0_0_39);
-        }
-        if version_lte(max_version, "0.0.45") {
-            prepended.push(BackwardCompat0_0_45);
-        }
-        if version_lte(max_version, "0.0.47") {
-            prepended.push(BackwardCompat0_0_47);
-        }
-        prepended.extend(std::mem::take(&mut self.middleware));
-        self.middleware = prepended;
-        self
     }
 
     /// Injects a custom "now" provider (ISO-8601) used to evaluate interrupt
@@ -341,6 +322,26 @@ impl<A: Agent + 'static> AgentRunner<A> {
     pub fn with_verify(mut self, verify: bool) -> Self {
         self.verify = verify;
         self
+    }
+
+    /// Pins the highest protocol version the peer speaks. Declared on every
+    /// outgoing `RunAgentInput` only while that ceiling is not below this
+    /// crate's own version — a peer pinned older predates the field, and an
+    /// unknown input member is exactly what a strict old parser rejects.
+    /// Mirrors TS `AbstractAgent.maxProtocolVersion` (`agent.ts:167-170`).
+    pub fn with_max_protocol_version(mut self, max_protocol_version: impl Into<String>) -> Self {
+        self.max_protocol_version = max_protocol_version.into();
+        self
+    }
+
+    /// The peer protocol ceiling, the name that replaced `maxVersion`.
+    /// `agent.ts:172-185` — same value, honest name.
+    #[deprecated(
+        since = "1.0.0",
+        note = "Use max_protocol_version / with_max_protocol_version — same value, honest name"
+    )]
+    pub fn max_version(&self) -> &str {
+        &self.max_protocol_version
     }
 
     /// Interrupts emitted by the most recent run that have not yet been
@@ -555,8 +556,13 @@ impl<A: Agent + 'static> AgentRunner<A> {
 
         // Mirror TS AbstractAgent.onInitialize: a run that follows interrupts
         // must address every still-open interrupt via `resume`, and none of
-        // them may have expired.
-        if !self.pending_interrupts.is_empty() {
+        // them may have expired without being cancelled.
+        //
+        // The check covers `runAgent` only. `connectAgent` just reads the
+        // thread's history and answers nothing, so an interrupted thread must
+        // still connect — upstream tracks the distinction in a module-level
+        // `runInputs` WeakSet populated only at `runAgent` (agent.ts:63, 326).
+        if !use_connect && !self.pending_interrupts.is_empty() {
             let now_iso = (self.now_fn)();
             ensure_resume_covers(&self.pending_interrupts, &params.resume, &now_iso)?;
         }
@@ -564,13 +570,29 @@ impl<A: Agent + 'static> AgentRunner<A> {
         let input = RunAgentInput {
             thread_id: self.thread_id.clone(),
             run_id: run_id.clone(),
+            // Declared only when the peer's ceiling is not pinned below this
+            // client: a downgraded peer predates the field, and an unknown input
+            // member is exactly what a strict old parser could reject
+            // (agent.ts:560-565). Each side declares itself, and the consumer
+            // sees a downgrade the moment it happens.
+            protocol_version: (compare_versions(
+                &self.max_protocol_version,
+                env!("CARGO_PKG_VERSION"),
+            ) >= 0)
+                .then(|| PROTOCOL_VERSION.to_string()),
             // ponytail: upstream prepareRunAgentInput drops parentRunId.
             parent_run_id: None,
-            state: self.state.clone(),
+            state: Some(self.state.clone()),
             messages: self.messages.clone(),
             tools: params.tools.clone(),
             context: params.context.clone(),
-            forwarded_props: params.forwarded_props.unwrap_or(Value::Null),
+            // ponytail: upstream sends `{}` when the caller passed nothing.
+            forwarded_props: Some(
+                params
+                    .forwarded_props
+                    .clone()
+                    .unwrap_or_else(|| serde_json::json!({})),
+            ),
             resume: (!params.resume.is_empty()).then_some(params.resume.clone()),
         };
 
@@ -788,6 +810,12 @@ impl<A: Agent + 'static> AgentRunner<A> {
 
             match &applied.event {
                 Event::RunStarted(event) => {
+                    // The producer's own answer to our declaration. Older or
+                    // absent is the quiet downgrade signal; newer means material
+                    // this client may be stripping, and that deserves a voice.
+                    // A per-run subscriber ahead of the registered ones, exactly
+                    // as upstream wires it (agent.ts:316-320).
+                    warn_on_producer_declaration(event.protocol_version.as_deref());
                     context.run_id = event.run_id.clone();
                     context.thread_id = event.thread_id.clone();
                     self.thread_id = event.thread_id.clone();
@@ -1070,22 +1098,6 @@ impl<A: Agent + 'static> AgentRunner<A> {
                             }
                         ));
                     }
-                    // legacy: THINKING_* is upstream-deprecated but must still pass through for old streams.
-                    #[allow(deprecated)]
-                    Event::ThinkingStart(event) => {
-                        try_subscriber_hook!(subscriber.on_thinking_start(&EventContext {
-                            run: &context,
-                            event,
-                        }));
-                    }
-                    // legacy: THINKING_* is upstream-deprecated but must still pass through for old streams.
-                    #[allow(deprecated)]
-                    Event::ThinkingEnd(event) => {
-                        try_subscriber_hook!(subscriber.on_thinking_end(&EventContext {
-                            run: &context,
-                            event,
-                        }));
-                    }
                     Event::StateSnapshot(event) => {
                         try_subscriber_hook!(subscriber.on_state_snapshot(&EventContext {
                             run: &context,
@@ -1138,13 +1150,8 @@ impl<A: Agent + 'static> AgentRunner<A> {
                             event,
                         }));
                     }
-                    // legacy: THINKING_* is upstream-deprecated but must still pass through for old streams.
-                    #[allow(deprecated)]
-                    Event::ThinkingTextMessageStart(_)
-                    | Event::ThinkingTextMessageContent(_)
-                    | Event::ThinkingTextMessageEnd(_)
                     // ponytail: subagent events have no subscriber projection yet.
-                    | Event::SubagentStarted(_)
+                    Event::SubagentStarted(_)
                     | Event::SubagentFinished(_)
                     | Event::SubagentError(_) => {}
                 }
@@ -1204,27 +1211,6 @@ fn generate_id(prefix: &str) -> String {
     format!("{prefix}-{micros}")
 }
 
-/// Compares two dotted numeric versions (e.g. "0.1.0" vs "0.0.45"), returning
-/// `true` when `lhs <= rhs`. Missing segments are treated as zero. Used to gate
-/// auto-insertion of backward-compatibility middleware.
-fn version_lte(lhs: &str, rhs: &str) -> bool {
-    fn parse(v: &str) -> Vec<u64> {
-        v.split('.')
-            .map(|part| part.trim().parse::<u64>().unwrap_or(0))
-            .collect()
-    }
-    let (a, b) = (parse(lhs), parse(rhs));
-    let len = a.len().max(b.len());
-    for i in 0..len {
-        let x = a.get(i).copied().unwrap_or(0);
-        let y = b.get(i).copied().unwrap_or(0);
-        if x != y {
-            return x < y;
-        }
-    }
-    true
-}
-
 fn apply_message_replacements(messages: &mut [Message], replacements: &HashMap<String, Message>) {
     for message in messages.iter_mut() {
         if let Some(replacement) = replacements.get(message.id()) {
@@ -1276,6 +1262,7 @@ mod tests {
         ToolCallArgsContext, ToolCallEndContext,
     };
     use agui_rs_core::types::AssistantMessage;
+    use agui_rs_core::AttributableFields;
     use agui_rs_core::{factory, BaseEventFields, FunctionCall, RunFinishedEvent, ToolCallKind};
     use futures::stream;
     use serde_json::{json, Value};
@@ -1325,6 +1312,8 @@ mod tests {
         ) -> std::result::Result<Option<Message>, AgUiError> {
             Ok(Some(Message::Assistant(AssistantMessage {
                 id: "replaced-message".into(),
+                metadata: None,
+                subagent_run_id: None,
                 content: Some("replaced".into()),
                 name: None,
                 tool_calls: None,
@@ -1343,6 +1332,7 @@ mod tests {
         ) -> std::result::Result<Option<ToolCall>, AgUiError> {
             Ok(Some(ToolCall {
                 id: "replaced-tool-call".into(),
+                metadata: None,
                 kind: ToolCallKind::Function,
                 function: FunctionCall {
                     name: "replacement_tool".into(),
@@ -1535,6 +1525,7 @@ mod tests {
                 Event::TextMessageChunk(agui_rs_core::TextMessageChunkEvent {
                     message_id: Some("m1".into()),
                     role: Some(agui_rs_core::TextMessageRole::Assistant),
+                    attributable: AttributableFields::default(),
                     delta: Some("hello".into()),
                     name: None,
                     base: BaseEventFields::default(),
@@ -1543,7 +1534,9 @@ mod tests {
                     thread_id: "thread-1".into(),
                     run_id: "run-1".into(),
                     result: None,
-                    outcome: Some(RunFinishedOutcome::Success),
+                    outcome: Some(RunFinishedOutcome::Success {
+                        pending_tool_call_ids: None,
+                    }),
                     usage: Vec::new(),
                     base: BaseEventFields::default(),
                 }),
@@ -1563,7 +1556,12 @@ mod tests {
             Message::Assistant(message) => assert_eq!(message.content.as_deref(), Some("hello")),
             _ => panic!("expected assistant message"),
         }
-        assert_eq!(result.outcome, Some(RunFinishedOutcome::Success));
+        assert_eq!(
+            result.outcome,
+            Some(RunFinishedOutcome::Success {
+                pending_tool_call_ids: None,
+            })
+        );
     }
 
     #[tokio::test]
@@ -1580,6 +1578,7 @@ mod tests {
                 Event::TextMessageChunk(agui_rs_core::TextMessageChunkEvent {
                     message_id: Some("m1".into()),
                     role: Some(agui_rs_core::TextMessageRole::Assistant),
+                    attributable: AttributableFields::default(),
                     delta: Some("hello".into()),
                     name: None,
                     base: BaseEventFields::default(),
@@ -1588,7 +1587,9 @@ mod tests {
                     thread_id: "thread-1".into(),
                     run_id: "run-1".into(),
                     result: None,
-                    outcome: Some(RunFinishedOutcome::Success),
+                    outcome: Some(RunFinishedOutcome::Success {
+                        pending_tool_call_ids: None,
+                    }),
                     usage: Vec::new(),
                     base: BaseEventFields::default(),
                 }),
@@ -1613,6 +1614,7 @@ mod tests {
                 Event::TextMessageChunk(agui_rs_core::TextMessageChunkEvent {
                     message_id: Some("m1".into()),
                     role: Some(agui_rs_core::TextMessageRole::Assistant),
+                    attributable: AttributableFields::default(),
                     delta: Some("hello".into()),
                     name: None,
                     base: BaseEventFields::default(),
@@ -1621,7 +1623,9 @@ mod tests {
                     thread_id: "thread-1".into(),
                     run_id: "run-1".into(),
                     result: None,
-                    outcome: Some(RunFinishedOutcome::Success),
+                    outcome: Some(RunFinishedOutcome::Success {
+                        pending_tool_call_ids: None,
+                    }),
                     usage: Vec::new(),
                     base: BaseEventFields::default(),
                 }),
@@ -1654,7 +1658,9 @@ mod tests {
                     thread_id: "thread-1".into(),
                     run_id: "run-1".into(),
                     result: None,
-                    outcome: Some(RunFinishedOutcome::Success),
+                    outcome: Some(RunFinishedOutcome::Success {
+                        pending_tool_call_ids: None,
+                    }),
                     usage: Vec::new(),
                     base: BaseEventFields::default(),
                 }),
@@ -1743,7 +1749,9 @@ mod tests {
                 .lock()
                 .expect("run_finished_outcomes lock")
                 .clone(),
-            vec![Some(RunFinishedOutcome::Success)]
+            vec![Some(RunFinishedOutcome::Success {
+                pending_tool_call_ids: None,
+            })]
         );
     }
 

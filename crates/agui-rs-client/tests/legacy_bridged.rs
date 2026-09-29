@@ -9,8 +9,7 @@ use legacy_impl::{
     convert_legacy_events, LegacyActionExecutionArgs, LegacyActionExecutionEnd,
     LegacyActionExecutionResult, LegacyActionExecutionStart, LegacyAgentStateMessage, LegacyEvent,
     LegacyMetaEvent, LegacyMetaEventName, LegacyRunError, LegacyTextMessageContent,
-    LegacyTextMessageEnd, LegacyTextMessageStart, LegacyThinkingEnd, LegacyThinkingStart,
-    LegacyThinkingTextMessageContent, LegacyThinkingTextMessageEnd, LegacyThinkingTextMessageStart,
+    LegacyTextMessageEnd, LegacyTextMessageStart,
 };
 use serde_json::json;
 
@@ -80,41 +79,7 @@ async fn converts_tool_call_legacy_events_and_preserves_result_payload() {
         matches!(&events[2], Ok(event) if *event == agui_rs_core::factory::tool_call_end("tc1"))
     );
     assert!(
-        matches!(&events[3], Ok(Event::ToolCallResult(result)) if result.tool_call_id == "tc1" && result.content == "ok")
-    );
-}
-
-#[tokio::test]
-async fn converts_thinking_legacy_events_to_reasoning_events() {
-    let events = collect(vec![
-        LegacyEvent::ThinkingStart(LegacyThinkingStart::default()),
-        LegacyEvent::ThinkingTextMessageStart(LegacyThinkingTextMessageStart::default()),
-        LegacyEvent::ThinkingTextMessageContent(LegacyThinkingTextMessageContent {
-            delta: "plan".into(),
-        }),
-        LegacyEvent::ThinkingTextMessageEnd(LegacyThinkingTextMessageEnd::default()),
-        LegacyEvent::ThinkingEnd(LegacyThinkingEnd::default()),
-    ])
-    .await;
-
-    let reasoning_start_id = match &events[0] {
-        Ok(Event::ReasoningStart(event)) => event.message_id.clone(),
-        other => panic!("unexpected event: {other:?}"),
-    };
-    let reasoning_message_id = match &events[1] {
-        Ok(Event::ReasoningMessageStart(event)) => event.message_id.clone(),
-        other => panic!("unexpected event: {other:?}"),
-    };
-
-    assert_ne!(reasoning_start_id, reasoning_message_id);
-    assert!(
-        matches!(&events[2], Ok(Event::ReasoningMessageContent(event)) if event.message_id == reasoning_message_id && event.delta == "plan")
-    );
-    assert!(
-        matches!(&events[3], Ok(Event::ReasoningMessageEnd(event)) if event.message_id == reasoning_message_id)
-    );
-    assert!(
-        matches!(&events[4], Ok(Event::ReasoningEnd(event)) if event.message_id == reasoning_start_id)
+        matches!(&events[3], Ok(Event::ToolCallResult(result)) if result.tool_call_id == "tc1" && result.content == agui_rs_core::ToolResultContent::Text("ok".into()))
     );
 }
 

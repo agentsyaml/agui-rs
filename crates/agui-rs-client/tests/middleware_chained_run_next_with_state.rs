@@ -17,13 +17,16 @@ mod middleware;
 mod subscriber;
 #[path = "../src/verify.rs"]
 mod verify;
+#[path = "../src/version.rs"]
+mod version;
 
 use agui_rs_core::{
-    BaseEventFields, Event, Message, RunAgentInput, RunFinishedEvent, TextMessageChunkEvent,
-    TextMessageRole,
+    AttributableFields, BaseEventFields, Event, Message, RunAgentInput, RunFinishedEvent,
+    TextMessageChunkEvent, TextMessageRole,
 };
 use async_trait::async_trait;
 use futures::{stream, StreamExt};
+use serde_json::Value;
 use std::sync::{Arc, Mutex};
 
 #[derive(Clone)]
@@ -57,7 +60,7 @@ impl middleware::Middleware for CapturingMiddleware {
         next: middleware::NextFn,
     ) -> std::result::Result<middleware::EventStream, agui_rs_core::AgUiError> {
         let initial_messages = input.run_agent_input.messages.clone();
-        let initial_state = input.run_agent_input.state.clone();
+        let initial_state = input.run_agent_input.state.clone().unwrap_or(Value::Null);
         let applied = apply::default_apply_events(
             verify::verify_events(chunks::expand_chunks(next(input).await?)),
             initial_messages,
@@ -92,6 +95,7 @@ async fn outer_and_inner_state_tracking_middlewares_both_capture_messages() {
             Event::TextMessageChunk(TextMessageChunkEvent {
                 message_id: Some("message-1".into()),
                 role: Some(TextMessageRole::Assistant),
+                attributable: AttributableFields::default(),
                 delta: Some("Hello".into()),
                 name: None,
                 base: BaseEventFields::default(),

@@ -50,6 +50,7 @@ impl Agent for ScriptedAgent {
 fn interrupt(id: &str, expires_at: Option<&str>) -> Interrupt {
     Interrupt {
         id: id.into(),
+        subagent_run_id: None,
         reason: "tool_call".into(),
         message: None,
         tool_call_id: None,
@@ -89,6 +90,7 @@ fn resolved(id: &str) -> ResumeEntry {
         interrupt_id: id.into(),
         status: ResumeStatus::Resolved,
         payload: None,
+        metadata: None,
     }
 }
 
@@ -144,6 +146,7 @@ async fn allows_run_when_resume_covers_every_pending_interrupt() {
                     interrupt_id: "int-2".into(),
                     status: ResumeStatus::Cancelled,
                     payload: None,
+                    metadata: None,
                 },
             ],
             ..RunAgentParameters::default()
@@ -264,4 +267,83 @@ async fn clone_runner_preserves_pending_interrupts() {
         .collect();
     assert_eq!(original_ids, vec!["int-1", "int-2"]);
     assert_eq!(cloned_ids, original_ids);
+}
+
+#[tokio::test]
+async fn a_cancelled_entry_lets_an_expired_interrupt_stop_blocking_its_thread() {
+    let agent = ScriptedAgent::new(vec![
+        interrupting_run(vec![interrupt("int-1", Some("2026-05-01T00:00:00Z"))]),
+        happy_run(),
+    ]);
+    let mut runner = AgentRunner::new(agent, AgentConfig::default())
+        .with_now_fn(|| "2026-05-30T00:00:00Z".to_string());
+
+    runner
+        .run_agent(RunAgentParameters::default())
+        .await
+        .expect("first run should succeed");
+
+    // Expiry forecloses ANSWERING, not resolving the thread: a cancelled entry
+    // is the conforming way past an interrupt nobody answered in time.
+    let result = runner
+        .run_agent(RunAgentParameters {
+            resume: vec![ResumeEntry {
+                interrupt_id: "int-1".into(),
+                status: ResumeStatus::Cancelled,
+                payload: None,
+                metadata: None,
+            }],
+            ..RunAgentParameters::default()
+        })
+        .await;
+
+    assert!(
+        result.is_ok(),
+        "cancelling must unblock the thread: {result:?}"
+    );
+}
+
+#[tokio::test]
+async fn connect_agent_does_not_enforce_resume_coverage() {
+    // "Every other caller, such as connectAgent(), only reads the thread's
+    // history and answers nothing, so an interrupted thread must still connect."
+    struct ConnectingAgent;
+
+    #[async_trait]
+    impl Agent for ConnectingAgent {
+        async fn run(&self, _input: RunAgentInput) -> Result<BoxStream<'static, Result<Event>>> {
+            Ok(Box::pin(stream::iter(Vec::new())))
+        }
+
+        async fn connect(
+            &self,
+            _input: RunAgentInput,
+        ) -> Result<BoxStream<'static, Result<Event>>> {
+            Ok(Box::pin(stream::iter(vec![
+                Ok(factory::run_started("thread-1", "run-1")),
+                Ok(factory::run_finished("thread-1", "run-1")),
+            ])))
+        }
+    }
+
+    let agent = ScriptedAgent::new(vec![interrupting_run(vec![interrupt("int-1", None)])]);
+    let mut runner = AgentRunner::new(agent, AgentConfig::default());
+    runner
+        .run_agent(RunAgentParameters::default())
+        .await
+        .expect("first run should succeed");
+    assert_eq!(runner.pending_interrupts().len(), 1);
+
+    // The same runner now answers nothing, on the connect path.
+    let connecting = AgentRunner::new(ConnectingAgent, AgentConfig::default());
+    let result = futures::executor::block_on(async move {
+        let mut connecting = connecting;
+        connecting
+            .connect_agent(RunAgentParameters::default())
+            .await
+    });
+    assert!(
+        result.is_ok(),
+        "connect must not be gated on resume: {result:?}"
+    );
 }

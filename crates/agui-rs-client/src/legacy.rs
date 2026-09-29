@@ -1,9 +1,7 @@
 use agui_rs_core::{
-    BaseEventFields, CustomEvent, Event, ReasoningEndEvent, ReasoningMessageContentEvent,
-    ReasoningMessageEndEvent, ReasoningMessageRole, ReasoningMessageStartEvent,
-    ReasoningStartEvent, RunErrorEvent, StateSnapshotEvent, TextMessageEndEvent, TextMessageRole,
-    TextMessageStartEvent, ToolCallArgsEvent, ToolCallEndEvent, ToolCallResultEvent,
-    ToolCallStartEvent,
+    AttributableFields, BaseEventFields, CustomEvent, Event, RunErrorEvent, StateSnapshotEvent,
+    TextMessageEndEvent, TextMessageRole, TextMessageStartEvent, ToolCallArgsEvent,
+    ToolCallEndEvent, ToolCallResultEvent, ToolCallStartEvent,
 };
 use async_stream::try_stream;
 use futures::{Stream, StreamExt};
@@ -93,28 +91,6 @@ pub struct LegacyRunError {
     pub code: Option<String>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct LegacyThinkingStart {
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub title: Option<String>,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub struct LegacyThinkingTextMessageStart {}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct LegacyThinkingTextMessageContent {
-    pub delta: String,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub struct LegacyThinkingTextMessageEnd {}
-
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub struct LegacyThinkingEnd {}
-
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum LegacyEvent {
@@ -138,16 +114,6 @@ pub enum LegacyEvent {
     MetaEvent(LegacyMetaEvent),
     #[serde(rename = "RunError")]
     RunError(LegacyRunError),
-    #[serde(rename = "THINKING_START")]
-    ThinkingStart(LegacyThinkingStart),
-    #[serde(rename = "THINKING_TEXT_MESSAGE_START")]
-    ThinkingTextMessageStart(LegacyThinkingTextMessageStart),
-    #[serde(rename = "THINKING_TEXT_MESSAGE_CONTENT")]
-    ThinkingTextMessageContent(LegacyThinkingTextMessageContent),
-    #[serde(rename = "THINKING_TEXT_MESSAGE_END")]
-    ThinkingTextMessageEnd(LegacyThinkingTextMessageEnd),
-    #[serde(rename = "THINKING_END")]
-    ThinkingEnd(LegacyThinkingEnd),
 }
 
 /// Converts legacy protocol events into current AG-UI events.
@@ -157,10 +123,6 @@ where
 {
     try_stream! {
         let mut stream = s.boxed();
-        let mut next_generated_id = 0usize;
-        let mut current_reasoning_id: Option<String> = None;
-        let mut current_reasoning_message_id: Option<String> = None;
-
         while let Some(event) = stream.next().await {
             match event {
                 LegacyEvent::TextMessageStart(event) => {
@@ -169,6 +131,7 @@ where
                         role: parse_text_role(event.role.as_deref()),
                         name: None,
                         base: BaseEventFields::default(),
+    attributable: AttributableFields::default(),
                     });
                 }
                 LegacyEvent::TextMessageContent(event) => {
@@ -176,12 +139,14 @@ where
                         message_id: event.message_id,
                         delta: event.content,
                         base: BaseEventFields::default(),
+    attributable: AttributableFields::default(),
                     });
                 }
                 LegacyEvent::TextMessageEnd(event) => {
                     yield Event::TextMessageEnd(TextMessageEndEvent {
                         message_id: event.message_id,
                         base: BaseEventFields::default(),
+    attributable: AttributableFields::default(),
                     });
                 }
                 LegacyEvent::ActionExecutionStart(event) => {
@@ -190,6 +155,7 @@ where
                         tool_call_name: event.action_name,
                         parent_message_id: event.parent_message_id,
                         base: BaseEventFields::default(),
+    attributable: AttributableFields::default(),
                     });
                 }
                 LegacyEvent::ActionExecutionArgs(event) => {
@@ -197,21 +163,24 @@ where
                         tool_call_id: event.action_execution_id,
                         delta: event.args,
                         base: BaseEventFields::default(),
+    attributable: AttributableFields::default(),
                     });
                 }
                 LegacyEvent::ActionExecutionEnd(event) => {
                     yield Event::ToolCallEnd(ToolCallEndEvent {
                         tool_call_id: event.action_execution_id,
                         base: BaseEventFields::default(),
+    attributable: AttributableFields::default(),
                     });
                 }
                 LegacyEvent::ActionExecutionResult(event) => {
                     yield Event::ToolCallResult(ToolCallResultEvent {
                         message_id: format!("legacy-tool-result-{}", event.action_execution_id),
                         tool_call_id: event.action_execution_id,
-                        content: event.result,
+                        content: event.result.into(),
                         role: None,
                         base: BaseEventFields::default(),
+    attributable: AttributableFields::default(),
                     });
                 }
                 LegacyEvent::AgentStateMessage(event) => {
@@ -219,6 +188,7 @@ where
                     yield Event::StateSnapshot(StateSnapshotEvent {
                         snapshot,
                         base: BaseEventFields::default(),
+    attributable: AttributableFields::default(),
                     });
                 }
                 LegacyEvent::MetaEvent(event) => {
@@ -231,6 +201,7 @@ where
                         .to_string(),
                         value: event.value,
                         base: BaseEventFields::default(),
+    attributable: AttributableFields::default(),
                     });
                 }
                 LegacyEvent::RunError(event) => {
@@ -241,63 +212,9 @@ where
                         base: BaseEventFields::default(),
                     });
                 }
-                LegacyEvent::ThinkingStart(_) => {
-                    let reasoning_id = generated_id(&mut next_generated_id, "legacy-reasoning");
-                    current_reasoning_id = Some(reasoning_id.clone());
-                    yield Event::ReasoningStart(ReasoningStartEvent {
-                        message_id: reasoning_id,
-                        base: BaseEventFields::default(),
-                    });
-                }
-                LegacyEvent::ThinkingTextMessageStart(_) => {
-                    let message_id = generated_id(&mut next_generated_id, "legacy-reasoning-message");
-                    current_reasoning_message_id = Some(message_id.clone());
-                    yield Event::ReasoningMessageStart(ReasoningMessageStartEvent {
-                        message_id,
-                        role: ReasoningMessageRole::Reasoning,
-                        base: BaseEventFields::default(),
-                    });
-                }
-                LegacyEvent::ThinkingTextMessageContent(event) => {
-                    let message_id = current_reasoning_message_id
-                        .clone()
-                        .unwrap_or_else(|| generated_id(&mut next_generated_id, "legacy-reasoning-message"));
-                    current_reasoning_message_id = Some(message_id.clone());
-                    yield Event::ReasoningMessageContent(ReasoningMessageContentEvent {
-                        message_id,
-                        delta: event.delta,
-                        base: BaseEventFields::default(),
-                    });
-                }
-                LegacyEvent::ThinkingTextMessageEnd(_) => {
-                    let message_id = current_reasoning_message_id
-                        .clone()
-                        .unwrap_or_else(|| generated_id(&mut next_generated_id, "legacy-reasoning-message"));
-                    current_reasoning_message_id = Some(message_id.clone());
-                    yield Event::ReasoningMessageEnd(ReasoningMessageEndEvent {
-                        message_id,
-                        base: BaseEventFields::default(),
-                    });
-                }
-                LegacyEvent::ThinkingEnd(_) => {
-                    let message_id = current_reasoning_id
-                        .clone()
-                        .unwrap_or_else(|| generated_id(&mut next_generated_id, "legacy-reasoning"));
-                    current_reasoning_id = None;
-                    current_reasoning_message_id = None;
-                    yield Event::ReasoningEnd(ReasoningEndEvent {
-                        message_id,
-                        base: BaseEventFields::default(),
-                    });
-                }
             }
         }
     }
-}
-
-fn generated_id(counter: &mut usize, prefix: &str) -> String {
-    *counter += 1;
-    format!("{prefix}-{}", *counter)
 }
 
 fn parse_text_role(role: Option<&str>) -> TextMessageRole {
@@ -311,6 +228,7 @@ fn parse_text_role(role: Option<&str>) -> TextMessageRole {
 
 #[cfg(test)]
 mod tests {
+    use agui_rs_core::AttributableFields;
     use agui_rs_core::BaseEventFields;
     use futures::{stream, StreamExt};
     use serde_json::json;
@@ -319,9 +237,7 @@ mod tests {
         convert_legacy_events, LegacyActionExecutionArgs, LegacyActionExecutionEnd,
         LegacyActionExecutionResult, LegacyActionExecutionStart, LegacyAgentStateMessage,
         LegacyEvent, LegacyMetaEvent, LegacyMetaEventName, LegacyRunError,
-        LegacyTextMessageContent, LegacyTextMessageEnd, LegacyTextMessageStart, LegacyThinkingEnd,
-        LegacyThinkingStart, LegacyThinkingTextMessageContent, LegacyThinkingTextMessageEnd,
-        LegacyThinkingTextMessageStart,
+        LegacyTextMessageContent, LegacyTextMessageEnd, LegacyTextMessageStart,
     };
 
     async fn collect(events: Vec<LegacyEvent>) -> Vec<crate::Result<agui_rs_core::Event>> {
@@ -386,6 +302,7 @@ mod tests {
                 tool_call_name: "search".into(),
                 parent_message_id: Some("m1".into()),
                 base: BaseEventFields::default(),
+                attributable: AttributableFields::default(),
             }))
         );
         assert!(
@@ -395,55 +312,7 @@ mod tests {
             matches!(&events[2], Ok(event) if *event == agui_rs_core::factory::tool_call_end("tc1"))
         );
         assert!(
-            matches!(&events[3], Ok(agui_rs_core::Event::ToolCallResult(event)) if event.tool_call_id == "tc1" && event.content == "ok")
-        );
-    }
-
-    #[tokio::test]
-    async fn converts_thinking_events_to_reasoning() {
-        let events = collect(vec![
-            LegacyEvent::ThinkingStart(LegacyThinkingStart::default()),
-            LegacyEvent::ThinkingTextMessageStart(LegacyThinkingTextMessageStart::default()),
-            LegacyEvent::ThinkingTextMessageContent(LegacyThinkingTextMessageContent {
-                delta: "plan".into(),
-            }),
-            LegacyEvent::ThinkingTextMessageEnd(LegacyThinkingTextMessageEnd::default()),
-            LegacyEvent::ThinkingEnd(LegacyThinkingEnd::default()),
-        ])
-        .await;
-
-        let reasoning_start_id = match &events[0] {
-            Ok(agui_rs_core::Event::ReasoningStart(event)) => event.message_id.clone(),
-            other => panic!("unexpected event: {other:?}"),
-        };
-        let reasoning_message_id = match &events[1] {
-            Ok(agui_rs_core::Event::ReasoningMessageStart(event)) => event.message_id.clone(),
-            other => panic!("unexpected event: {other:?}"),
-        };
-
-        assert_ne!(reasoning_start_id, reasoning_message_id);
-        assert!(
-            matches!(&events[2], Ok(agui_rs_core::Event::ReasoningMessageContent(event)) if event.message_id == reasoning_message_id && event.delta == "plan")
-        );
-        assert!(
-            matches!(&events[3], Ok(agui_rs_core::Event::ReasoningMessageEnd(event)) if event.message_id == reasoning_message_id)
-        );
-        assert!(
-            matches!(&events[4], Ok(agui_rs_core::Event::ReasoningEnd(event)) if event.message_id == reasoning_start_id)
-        );
-    }
-
-    #[tokio::test]
-    async fn generates_missing_reasoning_ids_on_content_only() {
-        let events = collect(vec![LegacyEvent::ThinkingTextMessageContent(
-            LegacyThinkingTextMessageContent {
-                delta: "solo".into(),
-            },
-        )])
-        .await;
-
-        assert!(
-            matches!(&events[0], Ok(agui_rs_core::Event::ReasoningMessageContent(event)) if event.message_id.starts_with("legacy-reasoning-message-"))
+            matches!(&events[3], Ok(agui_rs_core::Event::ToolCallResult(event)) if event.tool_call_id == "tc1" && event.content == agui_rs_core::ToolResultContent::Text("ok".into()))
         );
     }
 

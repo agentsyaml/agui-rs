@@ -5,18 +5,16 @@
 mod subscriber_impl;
 
 use agui_rs_core::types::{ActivityMessage, AssistantMessage};
-// legacy: THINKING_* is upstream-deprecated but must still pass through for old streams.
-#[allow(deprecated)]
 use agui_rs_core::{
-    BaseEventFields, CustomEvent, Event, FunctionCall, Interrupt, Message, RawEvent,
-    ReasoningEncryptedValueEvent, ReasoningEncryptedValueSubtype, ReasoningEndEvent,
+    AttributableFields, BaseEventFields, CustomEvent, Event, FunctionCall, Interrupt, Message,
+    RawEvent, ReasoningEncryptedValueEvent, ReasoningEncryptedValueSubtype, ReasoningEndEvent,
     ReasoningMessageChunkEvent, ReasoningMessageContentEvent, ReasoningMessageEndEvent,
     ReasoningMessageRole, ReasoningMessageStartEvent, ReasoningStartEvent, RunErrorEvent,
     RunFinishedEvent, RunFinishedOutcome, RunStartedEvent, State, StateDeltaEvent,
     StateSnapshotEvent, StepFinishedEvent, StepStartedEvent, TextMessageChunkEvent,
-    TextMessageContentEvent, TextMessageEndEvent, TextMessageRole, TextMessageStartEvent,
-    ThinkingEndEvent, ThinkingStartEvent, ToolCall, ToolCallArgsEvent, ToolCallChunkEvent,
-    ToolCallEndEvent, ToolCallKind, ToolCallResultEvent, ToolCallStartEvent,
+    TextMessageContentEvent, TextMessageEndEvent, TextMessageRole, TextMessageStartEvent, ToolCall,
+    ToolCallArgsEvent, ToolCallChunkEvent, ToolCallEndEvent, ToolCallKind, ToolCallResultEvent,
+    ToolCallStartEvent, ToolResultContent,
 };
 use async_trait::async_trait;
 use serde_json::{json, Value};
@@ -34,6 +32,8 @@ fn run_context() -> RunContext {
         thread_id: "thread-1".into(),
         messages: vec![Message::Assistant(AssistantMessage {
             id: "m-1".into(),
+            metadata: None,
+            subagent_run_id: None,
             content: Some("hello".into()),
             name: None,
             tool_calls: Some(vec![tool_call()]),
@@ -46,6 +46,7 @@ fn run_context() -> RunContext {
 fn tool_call() -> ToolCall {
     ToolCall {
         id: "call-1".into(),
+        metadata: None,
         kind: ToolCallKind::Function,
         function: FunctionCall {
             name: "search".into(),
@@ -62,6 +63,7 @@ fn run_started_event() -> RunStartedEvent {
         parent_run_id: None,
         input: None,
         base: BaseEventFields::default(),
+        protocol_version: None,
     }
 }
 
@@ -70,7 +72,9 @@ fn run_finished_event() -> RunFinishedEvent {
         thread_id: "thread-1".into(),
         run_id: "run-1".into(),
         result: Some(json!({"ok": true})),
-        outcome: Some(RunFinishedOutcome::Success),
+        outcome: Some(RunFinishedOutcome::Success {
+            pending_tool_call_ids: None,
+        }),
         usage: Vec::new(),
         base: BaseEventFields::default(),
     }
@@ -89,6 +93,7 @@ fn step_started_event() -> StepStartedEvent {
     StepStartedEvent {
         step_name: "plan".into(),
         base: BaseEventFields::default(),
+        attributable: AttributableFields::default(),
     }
 }
 
@@ -96,6 +101,7 @@ fn step_finished_event() -> StepFinishedEvent {
     StepFinishedEvent {
         step_name: "plan".into(),
         base: BaseEventFields::default(),
+        attributable: AttributableFields::default(),
     }
 }
 
@@ -103,6 +109,7 @@ fn text_start_event() -> TextMessageStartEvent {
     TextMessageStartEvent {
         message_id: "msg-1".into(),
         role: TextMessageRole::Assistant,
+        attributable: AttributableFields::default(),
         name: None,
         base: BaseEventFields::default(),
     }
@@ -113,6 +120,7 @@ fn text_content_event() -> TextMessageContentEvent {
         message_id: "msg-1".into(),
         delta: " world".into(),
         base: BaseEventFields::default(),
+        attributable: AttributableFields::default(),
     }
 }
 
@@ -120,6 +128,7 @@ fn text_end_event() -> TextMessageEndEvent {
     TextMessageEndEvent {
         message_id: "msg-1".into(),
         base: BaseEventFields::default(),
+        attributable: AttributableFields::default(),
     }
 }
 
@@ -127,6 +136,7 @@ fn text_chunk_event() -> TextMessageChunkEvent {
     TextMessageChunkEvent {
         message_id: Some("msg-1".into()),
         role: Some(TextMessageRole::Assistant),
+        attributable: AttributableFields::default(),
         delta: Some(" world".into()),
         name: None,
         base: BaseEventFields::default(),
@@ -139,6 +149,7 @@ fn tool_start_event() -> ToolCallStartEvent {
         tool_call_name: "search".into(),
         parent_message_id: Some("m-1".into()),
         base: BaseEventFields::default(),
+        attributable: AttributableFields::default(),
     }
 }
 
@@ -147,6 +158,7 @@ fn tool_args_event() -> ToolCallArgsEvent {
         tool_call_id: "call-1".into(),
         delta: "{\"q\":\"ru".into(),
         base: BaseEventFields::default(),
+        attributable: AttributableFields::default(),
     }
 }
 
@@ -154,6 +166,7 @@ fn tool_end_event() -> ToolCallEndEvent {
     ToolCallEndEvent {
         tool_call_id: "call-1".into(),
         base: BaseEventFields::default(),
+        attributable: AttributableFields::default(),
     }
 }
 
@@ -164,6 +177,7 @@ fn tool_chunk_event() -> ToolCallChunkEvent {
         parent_message_id: Some("m-1".into()),
         delta: Some("st\"}".into()),
         base: BaseEventFields::default(),
+        attributable: AttributableFields::default(),
     }
 }
 
@@ -172,6 +186,7 @@ fn tool_result_event() -> ToolCallResultEvent {
         message_id: "tool-msg-1".into(),
         tool_call_id: "call-1".into(),
         content: "done".into(),
+        attributable: AttributableFields::default(),
         role: None,
         base: BaseEventFields::default(),
     }
@@ -181,6 +196,7 @@ fn reasoning_start_event() -> ReasoningStartEvent {
     ReasoningStartEvent {
         message_id: "reason-1".into(),
         base: BaseEventFields::default(),
+        attributable: AttributableFields::default(),
     }
 }
 
@@ -188,6 +204,7 @@ fn reasoning_message_start_event() -> ReasoningMessageStartEvent {
     ReasoningMessageStartEvent {
         message_id: "reason-1".into(),
         role: ReasoningMessageRole::Reasoning,
+        attributable: AttributableFields::default(),
         base: BaseEventFields::default(),
     }
 }
@@ -197,6 +214,7 @@ fn reasoning_content_event() -> ReasoningMessageContentEvent {
         message_id: "reason-1".into(),
         delta: "ink".into(),
         base: BaseEventFields::default(),
+        attributable: AttributableFields::default(),
     }
 }
 
@@ -204,6 +222,7 @@ fn reasoning_message_end_event() -> ReasoningMessageEndEvent {
     ReasoningMessageEndEvent {
         message_id: "reason-1".into(),
         base: BaseEventFields::default(),
+        attributable: AttributableFields::default(),
     }
 }
 
@@ -212,6 +231,7 @@ fn reasoning_chunk_event() -> ReasoningMessageChunkEvent {
         message_id: Some("reason-1".into()),
         delta: Some("ink".into()),
         base: BaseEventFields::default(),
+        attributable: AttributableFields::default(),
     }
 }
 
@@ -219,6 +239,7 @@ fn reasoning_end_event() -> ReasoningEndEvent {
     ReasoningEndEvent {
         message_id: "reason-1".into(),
         base: BaseEventFields::default(),
+        attributable: AttributableFields::default(),
     }
 }
 
@@ -227,23 +248,7 @@ fn reasoning_encrypted_value_event() -> ReasoningEncryptedValueEvent {
         subtype: ReasoningEncryptedValueSubtype::Message,
         entity_id: "reason-1".into(),
         encrypted_value: "secret".into(),
-        base: BaseEventFields::default(),
-    }
-}
-
-// legacy: THINKING_* is upstream-deprecated but must still pass through for old streams.
-#[allow(deprecated)]
-fn thinking_start_event() -> ThinkingStartEvent {
-    ThinkingStartEvent {
-        title: Some("plan".into()),
-        base: BaseEventFields::default(),
-    }
-}
-
-// legacy: THINKING_* is upstream-deprecated but must still pass through for old streams.
-#[allow(deprecated)]
-fn thinking_end_event() -> ThinkingEndEvent {
-    ThinkingEndEvent {
+        attributable: AttributableFields::default(),
         base: BaseEventFields::default(),
     }
 }
@@ -252,6 +257,7 @@ fn state_snapshot_event() -> StateSnapshotEvent {
     StateSnapshotEvent {
         snapshot: json!({"count": 2}),
         base: BaseEventFields::default(),
+        attributable: AttributableFields::default(),
     }
 }
 
@@ -259,6 +265,7 @@ fn state_delta_event() -> StateDeltaEvent {
     StateDeltaEvent {
         delta: vec![json!({"op": "replace", "path": "/count", "value": 2})],
         base: BaseEventFields::default(),
+        attributable: AttributableFields::default(),
     }
 }
 
@@ -267,7 +274,8 @@ fn activity_snapshot_event() -> agui_rs_core::ActivitySnapshotEvent {
         message_id: "activity-1".into(),
         activity_type: "plan".into(),
         content: serde_json::Map::new(),
-        replace: true,
+        attributable: AttributableFields::default(),
+        replace: Some(true),
         base: BaseEventFields::default(),
     }
 }
@@ -278,6 +286,7 @@ fn activity_delta_event() -> agui_rs_core::ActivityDeltaEvent {
         activity_type: "plan".into(),
         patch: vec![json!({"op": "add", "path": "/steps/0", "value": "x"})],
         base: BaseEventFields::default(),
+        attributable: AttributableFields::default(),
     }
 }
 
@@ -286,6 +295,7 @@ fn raw_event() -> RawEvent {
         event: json!({"provider": "openai"}),
         source: Some("openai".into()),
         base: BaseEventFields::default(),
+        attributable: AttributableFields::default(),
     }
 }
 
@@ -294,12 +304,14 @@ fn custom_event() -> CustomEvent {
         name: "custom".into(),
         value: json!({"ok": true}),
         base: BaseEventFields::default(),
+        attributable: AttributableFields::default(),
     }
 }
 
 fn interrupt() -> Interrupt {
     Interrupt {
         id: "interrupt-1".into(),
+        subagent_run_id: None,
         reason: "needs_human".into(),
         message: None,
         tool_call_id: None,
@@ -401,6 +413,8 @@ async fn default_trait_methods_cover_all_public_callbacks() {
     let tool_call = tool_call();
     let message = Message::Assistant(AssistantMessage {
         id: "m-2".into(),
+        metadata: None,
+        subagent_run_id: None,
         content: Some("new".into()),
         name: None,
         tool_calls: None,
@@ -408,6 +422,8 @@ async fn default_trait_methods_cover_all_public_callbacks() {
     });
     let activity = ActivityMessage {
         id: "activity-1".into(),
+        metadata: None,
+        subagent_run_id: None,
         activity_type: "plan".into(),
         content: serde_json::Map::new(),
     };
@@ -436,8 +452,6 @@ async fn default_trait_methods_cover_all_public_callbacks() {
     let reasoning_chunk = reasoning_chunk_event();
     let reasoning_finished = reasoning_end_event();
     let reasoning_encrypted = reasoning_encrypted_value_event();
-    let thinking_start = thinking_start_event();
-    let thinking_end = thinking_end_event();
     let state_snapshot = state_snapshot_event();
     let state_delta = state_delta_event();
     let messages_snapshot = agui_rs_core::MessagesSnapshotEvent {
@@ -466,7 +480,9 @@ async fn default_trait_methods_cover_all_public_callbacks() {
         .await;
     subscriber.on_tool_call_args(&run, "call-1", "{}").await;
     subscriber.on_tool_call_end(&run, "call-1").await;
-    subscriber.on_tool_call_result(&run, "call-1", "done").await;
+    subscriber
+        .on_tool_call_result(&run, "call-1", &ToolResultContent::from("done"))
+        .await;
 
     assert!(subscriber
         .on_run_started_event(&EventContext {
@@ -634,20 +650,6 @@ async fn default_trait_methods_cover_all_public_callbacks() {
         .await
         .is_ok());
     assert!(subscriber
-        .on_thinking_start(&EventContext {
-            run: &run,
-            event: &thinking_start,
-        })
-        .await
-        .is_ok());
-    assert!(subscriber
-        .on_thinking_end(&EventContext {
-            run: &run,
-            event: &thinking_end,
-        })
-        .await
-        .is_ok());
-    assert!(subscriber
         .on_state_snapshot(&EventContext {
             run: &run,
             event: &state_snapshot,
@@ -743,6 +745,8 @@ async fn custom_subscriber_receives_expected_context_payloads() {
     let final_args = json!({"q": "rust"});
     let message = Message::Assistant(AssistantMessage {
         id: "m-2".into(),
+        metadata: None,
+        subagent_run_id: None,
         content: Some("x".into()),
         name: None,
         tool_calls: None,

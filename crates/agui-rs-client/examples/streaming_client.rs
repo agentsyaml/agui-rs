@@ -35,6 +35,8 @@ impl AgentSubscriber for PrintSubscriber {
 async fn main() -> agui_rs_core::Result<()> {
     let user_msg = Message::User(agui_rs_core::types::UserMessage {
         id: "u1".to_string(),
+        metadata: None,
+        subagent_run_id: None,
         content: UserMessageContent::Text("hello from streaming_client".to_string()),
         name: None,
         encrypted_value: None,

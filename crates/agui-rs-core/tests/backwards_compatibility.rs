@@ -1,6 +1,3 @@
-// legacy: THINKING_* is upstream-deprecated but must still pass through for old streams.
-#![allow(deprecated)]
-
 use agui_rs_core::types::{Message, RunAgentInput};
 use agui_rs_core::{Context, Event, Tool};
 use serde_json::json;
@@ -231,62 +228,4 @@ fn complex_nested_structures_ignore_extra_fields_at_multiple_levels() {
     assert!(serialized["messages"][1]["toolCalls"][0]["function"]
         .get("extraFunctionProp")
         .is_none());
-}
-
-#[test]
-fn legacy_thinking_events_exist_and_serialize_with_legacy_type_strings() {
-    let events = [
-        serde_json::to_value(Event::ThinkingStart(agui_rs_core::ThinkingStartEvent {
-            title: Some("planning".into()),
-            base: Default::default(),
-        }))
-        .unwrap(),
-        serde_json::to_value(Event::ThinkingTextMessageStart(Default::default())).unwrap(),
-        serde_json::to_value(Event::ThinkingTextMessageContent(
-            agui_rs_core::ThinkingTextMessageContentEvent {
-                delta: "hello".into(),
-                base: Default::default(),
-            },
-        ))
-        .unwrap(),
-        serde_json::to_value(Event::ThinkingEnd(Default::default())).unwrap(),
-    ];
-
-    assert_eq!(events[0]["type"], "THINKING_START");
-    assert_eq!(events[1]["type"], "THINKING_TEXT_MESSAGE_START");
-    assert_eq!(events[2]["type"], "THINKING_TEXT_MESSAGE_CONTENT");
-    assert_eq!(events[3]["type"], "THINKING_END");
-}
-
-#[test]
-fn legacy_thinking_payloads_deserialize_successfully() {
-    let thinking_start: Event = serde_json::from_value(json!({
-        "type": "THINKING_START",
-        "title": "planning"
-    }))
-    .expect("deserialize thinking start");
-    let thinking_text_start: Event = serde_json::from_value(json!({
-        "type": "THINKING_TEXT_MESSAGE_START"
-    }))
-    .expect("deserialize thinking text start");
-    let thinking_text_content: Event = serde_json::from_value(json!({
-        "type": "THINKING_TEXT_MESSAGE_CONTENT",
-        "delta": "hello"
-    }))
-    .expect("deserialize thinking text content");
-    let thinking_end: Event = serde_json::from_value(json!({
-        "type": "THINKING_END"
-    }))
-    .expect("deserialize thinking end");
-
-    assert!(matches!(thinking_start, Event::ThinkingStart(_)));
-    assert!(matches!(
-        thinking_text_start,
-        Event::ThinkingTextMessageStart(_)
-    ));
-    assert!(matches!(
-        thinking_text_content,
-        Event::ThinkingTextMessageContent(_)
-    ));
-    assert!(matches!(thinking_end, Event::ThinkingEnd(_)));
 }

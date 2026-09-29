@@ -17,13 +17,15 @@ mod middleware;
 mod subscriber;
 #[path = "../src/verify.rs"]
 mod verify;
+#[path = "../src/version.rs"]
+mod version;
 
 use agui_rs_core::types::{AssistantMessage, UserMessage};
 use agui_rs_core::{
-    factory, BaseEventFields, Event, Message, RunAgentInput, StateDeltaEvent, StateSnapshotEvent,
-    TextMessageChunkEvent, TextMessageContentEvent, TextMessageEndEvent, TextMessageRole,
-    TextMessageStartEvent, ToolCallArgsEvent, ToolCallChunkEvent, ToolCallEndEvent,
-    ToolCallResultEvent, ToolCallStartEvent, ToolResultRole, UserMessageContent,
+    factory, AttributableFields, BaseEventFields, Event, Message, RunAgentInput, StateDeltaEvent,
+    StateSnapshotEvent, TextMessageChunkEvent, TextMessageContentEvent, TextMessageEndEvent,
+    TextMessageRole, TextMessageStartEvent, ToolCallArgsEvent, ToolCallChunkEvent,
+    ToolCallEndEvent, ToolCallResultEvent, ToolCallStartEvent, ToolResultRole, UserMessageContent,
 };
 use async_stream::try_stream;
 use async_trait::async_trait;
@@ -66,7 +68,11 @@ impl middleware::Middleware for CapturingMiddleware {
         next: middleware::NextFn,
     ) -> std::result::Result<middleware::EventStream, agui_rs_core::AgUiError> {
         let initial_messages = input.run_agent_input.messages.clone();
-        let initial_state = input.run_agent_input.state.clone();
+        let initial_state = input
+            .run_agent_input
+            .state
+            .clone()
+            .unwrap_or(serde_json::Value::Null);
         let applied = apply::default_apply_events(
             verify::verify_events(chunks::expand_chunks(next(input).await?)),
             initial_messages,
@@ -138,6 +144,7 @@ impl middleware::Middleware for EventInjectingMiddleware {
                     yield Event::StateSnapshot(StateSnapshotEvent {
                         snapshot: json!({"injected": true}),
                         base: BaseEventFields::default(),
+                        attributable: AttributableFields::default(),
                     });
                 }
             }
@@ -193,6 +200,7 @@ fn text_chunk_events() -> Vec<Event> {
         Event::TextMessageChunk(TextMessageChunkEvent {
             message_id: Some("msg-1".into()),
             role: Some(TextMessageRole::Assistant),
+            attributable: AttributableFields::default(),
             delta: Some("Hello from agent".into()),
             name: None,
             base: BaseEventFields::default(),
@@ -207,6 +215,7 @@ fn full_text_events() -> Vec<Event> {
         Event::TextMessageStart(TextMessageStartEvent {
             message_id: "msg-1".into(),
             role: TextMessageRole::Assistant,
+            attributable: AttributableFields::default(),
             name: None,
             base: BaseEventFields::default(),
         }),
@@ -214,10 +223,12 @@ fn full_text_events() -> Vec<Event> {
             message_id: "msg-1".into(),
             delta: "Full text".into(),
             base: BaseEventFields::default(),
+            attributable: AttributableFields::default(),
         }),
         Event::TextMessageEnd(TextMessageEndEvent {
             message_id: "msg-1".into(),
             base: BaseEventFields::default(),
+            attributable: AttributableFields::default(),
         }),
         factory::run_finished("t1", "run-1"),
     ]
@@ -232,11 +243,13 @@ fn tool_chunk_events() -> Vec<Event> {
             parent_message_id: None,
             delta: Some("{\"city\":\"NYC\"}".into()),
             base: BaseEventFields::default(),
+            attributable: AttributableFields::default(),
         }),
         Event::ToolCallResult(ToolCallResultEvent {
             message_id: "tool-result-1".into(),
             tool_call_id: "tc-1".into(),
             content: "72°F".into(),
+            attributable: AttributableFields::default(),
             role: Some(ToolResultRole::Tool),
             base: BaseEventFields::default(),
         }),
@@ -252,20 +265,24 @@ fn full_tool_call_events() -> Vec<Event> {
             tool_call_name: "search".into(),
             parent_message_id: None,
             base: BaseEventFields::default(),
+            attributable: AttributableFields::default(),
         }),
         Event::ToolCallArgs(ToolCallArgsEvent {
             tool_call_id: "tc-1".into(),
             delta: "{\"q\":\"test\"}".into(),
             base: BaseEventFields::default(),
+            attributable: AttributableFields::default(),
         }),
         Event::ToolCallEnd(ToolCallEndEvent {
             tool_call_id: "tc-1".into(),
             base: BaseEventFields::default(),
+            attributable: AttributableFields::default(),
         }),
         Event::ToolCallResult(ToolCallResultEvent {
             message_id: "tool-result-1".into(),
             tool_call_id: "tc-1".into(),
             content: "result".into(),
+            attributable: AttributableFields::default(),
             role: Some(ToolResultRole::Tool),
             base: BaseEventFields::default(),
         }),
@@ -279,10 +296,12 @@ fn text_and_state_events() -> Vec<Event> {
         Event::StateSnapshot(StateSnapshotEvent {
             snapshot: json!({"temperature": 72}),
             base: BaseEventFields::default(),
+            attributable: AttributableFields::default(),
         }),
         Event::TextMessageChunk(TextMessageChunkEvent {
             message_id: Some("msg-1".into()),
             role: Some(TextMessageRole::Assistant),
+            attributable: AttributableFields::default(),
             delta: Some("Weather is nice".into()),
             name: None,
             base: BaseEventFields::default(),
@@ -290,6 +309,7 @@ fn text_and_state_events() -> Vec<Event> {
         Event::StateDelta(StateDeltaEvent {
             delta: vec![json!({"op": "replace", "path": "/temperature", "value": 75})],
             base: BaseEventFields::default(),
+            attributable: AttributableFields::default(),
         }),
         factory::run_finished("t1", "run-1"),
     ]
@@ -301,6 +321,7 @@ fn messages_snapshot_events() -> Vec<Event> {
         Event::TextMessageStart(TextMessageStartEvent {
             message_id: "msg-1".into(),
             role: TextMessageRole::Assistant,
+            attributable: AttributableFields::default(),
             name: None,
             base: BaseEventFields::default(),
         }),
@@ -308,21 +329,27 @@ fn messages_snapshot_events() -> Vec<Event> {
             message_id: "msg-1".into(),
             delta: "original".into(),
             base: BaseEventFields::default(),
+            attributable: AttributableFields::default(),
         }),
         Event::TextMessageEnd(TextMessageEndEvent {
             message_id: "msg-1".into(),
             base: BaseEventFields::default(),
+            attributable: AttributableFields::default(),
         }),
         Event::MessagesSnapshot(agui_rs_core::MessagesSnapshotEvent {
             messages: vec![
                 Message::User(UserMessage {
                     id: "snap-1".into(),
+                    metadata: None,
+                    subagent_run_id: None,
                     content: UserMessageContent::Text("question".into()),
                     name: None,
                     encrypted_value: None,
                 }),
                 Message::Assistant(AssistantMessage {
                     id: "snap-2".into(),
+                    metadata: None,
+                    subagent_run_id: None,
                     content: Some("answer".into()),
                     name: None,
                     tool_calls: None,
@@ -341,6 +368,7 @@ fn multi_message_events() -> Vec<Event> {
         Event::TextMessageChunk(TextMessageChunkEvent {
             message_id: Some("msg-1".into()),
             role: Some(TextMessageRole::Assistant),
+            attributable: AttributableFields::default(),
             delta: Some("First".into()),
             name: None,
             base: BaseEventFields::default(),
@@ -348,6 +376,7 @@ fn multi_message_events() -> Vec<Event> {
         Event::TextMessageChunk(TextMessageChunkEvent {
             message_id: Some("msg-2".into()),
             role: Some(TextMessageRole::Assistant),
+            attributable: AttributableFields::default(),
             delta: Some("Second".into()),
             name: None,
             base: BaseEventFields::default(),
@@ -362,6 +391,7 @@ fn text_then_tool_events() -> Vec<Event> {
         Event::TextMessageChunk(TextMessageChunkEvent {
             message_id: Some("msg-1".into()),
             role: Some(TextMessageRole::Assistant),
+            attributable: AttributableFields::default(),
             delta: Some("Let me search".into()),
             name: None,
             base: BaseEventFields::default(),
@@ -371,20 +401,24 @@ fn text_then_tool_events() -> Vec<Event> {
             tool_call_name: "search".into(),
             parent_message_id: None,
             base: BaseEventFields::default(),
+            attributable: AttributableFields::default(),
         }),
         Event::ToolCallArgs(ToolCallArgsEvent {
             tool_call_id: "tc-1".into(),
             delta: "{\"q\":\"test\"}".into(),
             base: BaseEventFields::default(),
+            attributable: AttributableFields::default(),
         }),
         Event::ToolCallEnd(ToolCallEndEvent {
             tool_call_id: "tc-1".into(),
             base: BaseEventFields::default(),
+            attributable: AttributableFields::default(),
         }),
         Event::ToolCallResult(ToolCallResultEvent {
             message_id: "tool-result-1".into(),
             tool_call_id: "tc-1".into(),
             content: "found it".into(),
+            attributable: AttributableFields::default(),
             role: Some(ToolResultRole::Tool),
             base: BaseEventFields::default(),
         }),
@@ -482,7 +516,12 @@ async fn chained_middlewares_track_tool_call_messages_from_chunks() {
             other => panic!("expected assistant message, got {other:?}"),
         }
         match &captured[1] {
-            Message::Tool(message) => assert_eq!(message.content, "72°F"),
+            Message::Tool(message) => {
+                assert_eq!(
+                    message.content,
+                    agui_rs_core::ToolResultContent::from("72°F")
+                )
+            }
             other => panic!("expected tool message, got {other:?}"),
         }
     }
@@ -646,7 +685,12 @@ async fn mixed_text_and_tool_call_events_attach_tool_call_to_existing_message() 
             .find(|message| matches!(message, Message::Tool(_)))
             .expect("tool msg");
         match tool {
-            Message::Tool(message) => assert_eq!(message.content, "found it"),
+            Message::Tool(message) => {
+                assert_eq!(
+                    message.content,
+                    agui_rs_core::ToolResultContent::from("found it")
+                )
+            }
             other => panic!("expected tool message, got {other:?}"),
         }
     }
@@ -708,6 +752,8 @@ async fn initial_messages_are_preserved_and_new_messages_accumulate() {
     let config = agent::AgentConfig {
         initial_messages: vec![Message::User(UserMessage {
             id: "existing".into(),
+            metadata: None,
+            subagent_run_id: None,
             content: UserMessageContent::Text("Hi".into()),
             name: None,
             encrypted_value: None,

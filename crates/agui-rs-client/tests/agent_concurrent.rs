@@ -1,6 +1,6 @@
 use agui_rs_client::{Agent, AgentConfig, AgentRunner, RunAgentParameters};
 use agui_rs_core::types::AssistantMessage;
-use agui_rs_core::{Event, Result, RunAgentInput, RunFinishedEvent};
+use agui_rs_core::{AttributableFields, Event, Result, RunAgentInput, RunFinishedEvent};
 use async_trait::async_trait;
 use futures::{stream, stream::BoxStream};
 use std::sync::Arc;
@@ -22,6 +22,7 @@ impl Agent for EchoAgent {
                 agui_rs_core::TextMessageChunkEvent {
                     message_id: Some(message_id),
                     role: Some(agui_rs_core::TextMessageRole::Assistant),
+                    attributable: AttributableFields::default(),
                     delta: Some(delta),
                     name: None,
                     base: agui_rs_core::BaseEventFields::default(),
@@ -31,7 +32,9 @@ impl Agent for EchoAgent {
                 thread_id,
                 run_id,
                 result: None,
-                outcome: Some(agui_rs_core::RunFinishedOutcome::Success),
+                outcome: Some(agui_rs_core::RunFinishedOutcome::Success {
+                    pending_tool_call_ids: None,
+                }),
                 usage: Vec::new(),
                 base: agui_rs_core::BaseEventFields::default(),
             })),

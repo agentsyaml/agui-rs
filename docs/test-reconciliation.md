@@ -1,9 +1,16 @@
 # TS ⇄ Rust Test Reconciliation
 
 A per-file, per-case reconciliation of the canonical TypeScript test suite
-(`sdks/typescript/packages/{core,client,encoder}` at `0.0.57`, commit
-`54f1341`) against this SDK's tests. The goal is to make "are these really all
+(`sdks/typescript/packages/{core,client,encoder}` at `1.0.0`, commit
+`024332cb`) against this SDK's tests. The goal is to make "are these really all
 the gaps?" **verifiable** rather than asserted.
+
+> **⚠️ STALE — this document predates the 0.2.0 / upstream 1.0.0 migration.**
+> The per-file case counts, classifications, and the 574 / 504 / 76 totals
+> below were computed against TS `0.0.57` (commit `54f1341`) and no longer
+> describe the current port. The reconciliation itself needs to be re-run
+> against 1.0.0; only the version pin above has been updated. The
+> classification methodology in "How to reproduce" is still valid.
 
 Method: enumerate every TS `it()/test()` case per file and map each TS test file
 to its Rust counterpart(s) (integration test + relevant `src/` unit tests),

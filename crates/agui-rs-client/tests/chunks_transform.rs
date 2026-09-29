@@ -3,9 +3,9 @@ use agui_rs_core::{
     event_factories::{
         create_raw_event, create_text_message_chunk_event, create_tool_call_chunk_event,
     },
-    factory, AgUiError, BaseEventFields, Event, RawEvent, TextMessageContentEvent,
-    TextMessageEndEvent, TextMessageRole, TextMessageStartEvent, ToolCallArgsEvent,
-    ToolCallEndEvent, ToolCallStartEvent,
+    factory, AgUiError, AttributableFields, BaseEventFields, Event, RawEvent,
+    TextMessageContentEvent, TextMessageEndEvent, TextMessageRole, TextMessageStartEvent,
+    ToolCallArgsEvent, ToolCallEndEvent, ToolCallStartEvent,
 };
 use futures::{stream, StreamExt};
 use serde_json::json;
@@ -41,6 +41,7 @@ fn text_start(message_id: &str, role: TextMessageRole, name: Option<&str>) -> Ev
         role,
         name: name.map(str::to_string),
         base: BaseEventFields::default(),
+        attributable: AttributableFields::default(),
     })
 }
 
@@ -49,6 +50,7 @@ fn text_content(message_id: &str, delta: &str) -> Event {
         message_id: message_id.to_string(),
         delta: delta.to_string(),
         base: BaseEventFields::default(),
+        attributable: AttributableFields::default(),
     })
 }
 
@@ -56,6 +58,7 @@ fn text_end(message_id: &str) -> Event {
     Event::TextMessageEnd(TextMessageEndEvent {
         message_id: message_id.to_string(),
         base: BaseEventFields::default(),
+        attributable: AttributableFields::default(),
     })
 }
 
@@ -65,6 +68,7 @@ fn tool_start(tool_call_id: &str, tool_call_name: &str, parent_message_id: Optio
         tool_call_name: tool_call_name.to_string(),
         parent_message_id: parent_message_id.map(str::to_string),
         base: BaseEventFields::default(),
+        attributable: AttributableFields::default(),
     })
 }
 
@@ -73,6 +77,7 @@ fn tool_args(tool_call_id: &str, delta: &str) -> Event {
         tool_call_id: tool_call_id.to_string(),
         delta: delta.to_string(),
         base: BaseEventFields::default(),
+        attributable: AttributableFields::default(),
     })
 }
 
@@ -80,6 +85,7 @@ fn tool_end(tool_call_id: &str) -> Event {
     Event::ToolCallEnd(ToolCallEndEvent {
         tool_call_id: tool_call_id.to_string(),
         base: BaseEventFields::default(),
+        attributable: AttributableFields::default(),
     })
 }
 
@@ -737,6 +743,7 @@ async fn raw_event_does_not_close_pending_text_message() {
         event: json!({ "provider": "test" }),
         source: Some("raw-source".into()),
         base: BaseEventFields::default(),
+        attributable: AttributableFields::default(),
     });
     let events = collect_ok(vec![
         create_text_message_chunk_event(
@@ -772,6 +779,7 @@ async fn custom_event_closes_pending_text_message() {
         name: "mark".into(),
         value: json!({ "x": 1 }),
         base: BaseEventFields::default(),
+        attributable: AttributableFields::default(),
     });
     let events = collect_ok(vec![
         create_text_message_chunk_event(
@@ -803,6 +811,7 @@ async fn tool_call_result_closes_pending_text_message() {
         message_id: "tool-msg-1".into(),
         tool_call_id: "tc-1".into(),
         content: "done".into(),
+        attributable: AttributableFields::default(),
         role: None,
         base: BaseEventFields::default(),
     });

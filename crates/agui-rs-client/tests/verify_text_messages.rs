@@ -25,6 +25,7 @@ fn raw_event() -> Event {
         event: json!({ "type": "raw_data", "content": "test" }),
         source: None,
         base: BaseEventFields::default(),
+        attributable: AttributableFields::default(),
     })
 }
 
@@ -33,6 +34,7 @@ fn custom_event() -> Event {
         name: "test_event".into(),
         value: json!("test_value"),
         base: BaseEventFields::default(),
+        attributable: AttributableFields::default(),
     })
 }
 
@@ -49,6 +51,7 @@ fn tool_call_start_with_parent(tool_call_id: &str, parent_message_id: &str) -> E
         tool_call_name: "search".into(),
         parent_message_id: Some(parent_message_id.into()),
         base: BaseEventFields::default(),
+        attributable: AttributableFields::default(),
     })
 }
 
@@ -89,12 +92,14 @@ async fn second_text_message_start_while_active_errors() {
         Event::TextMessageStart(TextMessageStartEvent {
             message_id: "m1".into(),
             role: TextMessageRole::Assistant,
+            attributable: AttributableFields::default(),
             name: None,
             base: BaseEventFields::default(),
         }),
         Event::TextMessageStart(TextMessageStartEvent {
             message_id: "m2".into(),
             role: TextMessageRole::Assistant,
+            attributable: AttributableFields::default(),
             name: None,
             base: BaseEventFields::default(),
         }),
@@ -234,6 +239,6 @@ async fn run_finished_with_active_text_message_errors() {
 
     assert_validation(
         &out[2],
-        "Cannot send 'RUN_FINISHED' while text message 'm1' is still active",
+        "Cannot send 'RUN_FINISHED' while text messages are still active: m1",
     );
 }

@@ -17,6 +17,8 @@ mod middleware;
 mod subscriber;
 #[path = "../src/verify.rs"]
 mod verify;
+#[path = "../src/version.rs"]
+mod version;
 
 use agui_rs_core::{
     factory, BaseEventFields, Event, RunAgentInput, RunFinishedEvent, RunFinishedOutcome,
@@ -101,7 +103,9 @@ async fn function_based_middleware_can_intercept_events() {
                     thread_id: "test-thread".into(),
                     run_id: "test-run".into(),
                     result: None,
-                    outcome: Some(RunFinishedOutcome::Success),
+                    outcome: Some(RunFinishedOutcome::Success {
+                        pending_tool_call_ids: None,
+                    }),
                     usage: Vec::new(),
                     base: BaseEventFields::default(),
                 })),

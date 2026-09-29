@@ -3,7 +3,7 @@ use agui_rs_core::{ActivityDeltaEvent, ActivitySnapshotEvent, Event};
 use serde_json::json;
 
 #[test]
-fn activity_snapshot_event_defaults_replace_to_true() {
+fn activity_snapshot_event_omits_absent_replace() {
     let event: Event = serde_json::from_value(json!({
         "type": "ACTIVITY_SNAPSHOT",
         "messageId": "msg_activity",
@@ -23,7 +23,7 @@ fn activity_snapshot_event_defaults_replace_to_true() {
             assert_eq!(message_id, "msg_activity");
             assert_eq!(activity_type, "PLAN");
             assert_eq!(content.get("tasks"), Some(&json!(["search"])));
-            assert!(replace);
+            assert_eq!(replace, None);
         }
         other => panic!("expected ActivitySnapshot, got {other:?}"),
     }
@@ -41,7 +41,7 @@ fn activity_snapshot_event_respects_replace_flag() {
     .expect("deserialize activity snapshot");
 
     match event {
-        Event::ActivitySnapshot(event) => assert!(!event.replace),
+        Event::ActivitySnapshot(event) => assert_eq!(event.replace, Some(false)),
         other => panic!("expected ActivitySnapshot, got {other:?}"),
     }
 }

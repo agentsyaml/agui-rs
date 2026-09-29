@@ -81,6 +81,8 @@ impl AgentSubscriber for RecordingSubscriber {
 fn user_message(id: &str, content: &str) -> Message {
     Message::User(UserMessage {
         id: id.into(),
+        metadata: None,
+        subagent_run_id: None,
         content: UserMessageContent::Text(content.into()),
         name: None,
         encrypted_value: None,
@@ -90,6 +92,8 @@ fn user_message(id: &str, content: &str) -> Message {
 fn assistant_with_tool_calls(id: &str, tool_calls: Vec<ToolCall>) -> Message {
     Message::Assistant(AssistantMessage {
         id: id.into(),
+        metadata: None,
+        subagent_run_id: None,
         content: Some("...".into()),
         name: None,
         tool_calls: Some(tool_calls),
@@ -100,6 +104,7 @@ fn assistant_with_tool_calls(id: &str, tool_calls: Vec<ToolCall>) -> Message {
 fn tool_call(id: &str, name: &str) -> ToolCall {
     ToolCall {
         id: id.into(),
+        metadata: None,
         kind: ToolCallKind::Function,
         function: FunctionCall {
             name: name.into(),
@@ -138,6 +143,8 @@ async fn add_assistant_message_without_tool_calls_does_not_fire_new_tool_call() 
     runner
         .add_message(Message::Assistant(AssistantMessage {
             id: "assistant-msg-1".into(),
+            metadata: None,
+            subagent_run_id: None,
             content: Some("How can I help you?".into()),
             name: None,
             tool_calls: None,

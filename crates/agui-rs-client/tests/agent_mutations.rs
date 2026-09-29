@@ -1,6 +1,6 @@
 use agui_rs_client::{Agent, AgentConfig, AgentRunner, RunAgentParameters};
 use agui_rs_core::types::AssistantMessage;
-use agui_rs_core::{factory, Event, Message, Result, RunAgentInput};
+use agui_rs_core::{factory, AttributableFields, Event, Message, Result, RunAgentInput};
 use async_trait::async_trait;
 use futures::{stream, stream::BoxStream};
 
@@ -25,6 +25,7 @@ async fn on_new_message_replaces_message_in_place() {
             Event::TextMessageChunk(agui_rs_core::TextMessageChunkEvent {
                 message_id: Some("m1".into()),
                 role: Some(agui_rs_core::TextMessageRole::Assistant),
+                attributable: AttributableFields::default(),
                 delta: Some("hello".into()),
                 name: None,
                 base: agui_rs_core::BaseEventFields::default(),
@@ -85,6 +86,7 @@ async fn message_and_tool_call_outputs_share_same_assistant_message() {
             Event::TextMessageChunk(agui_rs_core::TextMessageChunkEvent {
                 message_id: Some("m1".into()),
                 role: Some(agui_rs_core::TextMessageRole::Assistant),
+                attributable: AttributableFields::default(),
                 delta: Some("hello".into()),
                 name: None,
                 base: agui_rs_core::BaseEventFields::default(),
@@ -117,6 +119,8 @@ async fn message_and_tool_call_outputs_share_same_assistant_message() {
 async fn new_messages_are_appended_after_initial_messages() {
     let initial_message = Message::Assistant(AssistantMessage {
         id: "existing".into(),
+        metadata: None,
+        subagent_run_id: None,
         content: Some("before".into()),
         name: None,
         tool_calls: None,
@@ -128,6 +132,7 @@ async fn new_messages_are_appended_after_initial_messages() {
             Event::TextMessageChunk(agui_rs_core::TextMessageChunkEvent {
                 message_id: Some("m1".into()),
                 role: Some(agui_rs_core::TextMessageRole::Assistant),
+                attributable: AttributableFields::default(),
                 delta: Some("after".into()),
                 name: None,
                 base: agui_rs_core::BaseEventFields::default(),

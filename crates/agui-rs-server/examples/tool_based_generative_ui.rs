@@ -55,6 +55,8 @@ impl RunHandler for ToolBasedGenerativeUiHandler {
                     name: None,
                     tool_calls: None,
                     encrypted_value: None,
+                    subagent_run_id: None,
+                    metadata: None,
                 });
                 all_messages.push(assistant);
             } else {
@@ -79,8 +81,11 @@ impl RunHandler for ToolBasedGenerativeUiHandler {
                             .to_string(),
                         },
                         encrypted_value: None,
+                        metadata: None,
                     }]),
                     encrypted_value: None,
+                    subagent_run_id: None,
+                    metadata: None,
                 });
                 let tool_result = Message::Tool(ToolMessage {
                     id: format!("msg-{}-tool", run_id),
@@ -88,6 +93,8 @@ impl RunHandler for ToolBasedGenerativeUiHandler {
                     tool_call_id,
                     error: None,
                     encrypted_value: None,
+                    subagent_run_id: None,
+                    metadata: None,
                 });
                 all_messages.push(assistant);
                 all_messages.push(tool_result);

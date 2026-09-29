@@ -44,8 +44,9 @@ pub fn sse_body(stream: BoxStream<'static, Result<Event>>, encoder: EventEncoder
 ///
 /// Each event is encoded with [`EventEncoder::encode_binary`], which emits a
 /// 4-byte big-endian length header followed by the protobuf `Event` message,
-/// matching the canonical wire format. Events that fall outside the protobuf
-/// schema (reasoning / activity / thinking) surface as a terminal `RUN_ERROR`.
+/// matching the canonical wire format. Every event in the schema has a
+/// protobuf form, so an encoding failure here is a genuine error rather than an
+/// unsupported event.
 pub fn proto_body(stream: BoxStream<'static, Result<Event>>, encoder: EventEncoder) -> Body {
     let body_stream = stream! {
         let mut stream = stream;

@@ -2,8 +2,11 @@
 
 Wire-format encoder for AG-UI events.
 
-Currently supports SSE (`text/event-stream`). Protobuf (`application/vnd.ag-ui.event+proto`)
-surface is stubbed — returns `AgUiError::Unsupported` until a proto crate lands.
+Supports SSE (`text/event-stream`, the default) and protobuf
+(`application/vnd.ag-ui.event+proto`) via the `agui-rs-proto` crate, with
+`Accept` content negotiation mirroring upstream `media-type.ts`. Note that
+`Accept: */*` and `Accept: application/*` select **protobuf**; send an explicit
+`Accept: text/event-stream` for SSE.
 
 ## License
 

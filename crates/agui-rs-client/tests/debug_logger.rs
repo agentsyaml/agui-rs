@@ -17,6 +17,7 @@ fn run_event() -> Event {
         parent_run_id: None,
         input: None,
         base: BaseEventFields::default(),
+        protocol_version: None,
     })
 }
 

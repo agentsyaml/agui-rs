@@ -13,10 +13,17 @@ struct VerifierState {
     active_text_message_id: Option<String>,
     active_tool_call_id: Option<String>,
     active_tool_call_parent_message_id: Option<String>,
-    active_reasoning_message_id: Option<String>,
-    active_reasoning_message_open: bool,
-    active_thinking: bool,
-    active_thinking_message: bool,
+    // Reasoning has TWO bracketed entities, not one. A SPAN is opened by
+    // REASONING_START and closed by REASONING_END; a reasoning MESSAGE is
+    // opened by REASONING_MESSAGE_START and closed by REASONING_MESSAGE_END
+    // (upstream `verify/verify.ts:22-38`). The specification says the span's
+    // identifier "namespaces nothing" and the messages inside carry their own
+    // ids, so the two are tracked separately — which also means one id may
+    // legitimately name both. Reasoning was the one streaming entity whose
+    // open/close discipline went unverified: a content event with no opener, a
+    // message never closed, and a span closed without being opened all passed.
+    active_reasoning_spans: HashSet<String>,
+    active_reasoning_messages: HashSet<String>,
     run_errored: bool,
     active_step_names: HashSet<String>,
 }
@@ -59,8 +66,6 @@ impl VerifierState {
         self.clear_active_state();
     }
 
-    // legacy: THINKING_* is upstream-deprecated but must still pass through for old streams.
-    #[allow(deprecated)]
     fn validate_event(&mut self, event: &Event) -> VerifyResult<()> {
         // RUN_ERROR is permanently terminal: nothing (not even a new run) may
         // follow it.
@@ -127,17 +132,14 @@ impl VerifierState {
             Event::ToolCallEnd(event) => self.end_tool_call(&event.tool_call_id),
             Event::ReasoningStart(event) => self.start_reasoning(&event.message_id),
             Event::ReasoningMessageStart(event) => self.start_reasoning_message(&event.message_id),
-            Event::ReasoningMessageContent(event) => self.reasoning_content(&event.message_id),
+            Event::ReasoningMessageContent(event) => {
+                self.continue_reasoning_message(&event.message_id, "REASONING_MESSAGE_CONTENT")
+            }
             Event::ReasoningMessageChunk(event) => {
                 self.reasoning_chunk(event.message_id.as_deref())
             }
             Event::ReasoningMessageEnd(event) => self.end_reasoning_message(&event.message_id),
             Event::ReasoningEnd(event) => self.end_reasoning(&event.message_id),
-            Event::ThinkingStart(_) => self.start_thinking(),
-            Event::ThinkingTextMessageStart(_) => self.start_thinking_message(),
-            Event::ThinkingTextMessageContent(_) => self.thinking_message_content(),
-            Event::ThinkingTextMessageEnd(_) => self.end_thinking_message(),
-            Event::ThinkingEnd(_) => self.end_thinking(),
             Event::StepStarted(event) => self.start_step(&event.step_name),
             Event::StepFinished(event) => self.finish_step(&event.step_name),
             // ponytail: subagent events are pass-through (outcome/interruptIds
@@ -162,35 +164,40 @@ impl VerifierState {
 
         if let Some(message_id) = self.active_text_message_id.as_deref() {
             return Err(AgUiError::validation(format!(
-                "Cannot send 'RUN_FINISHED' while text message '{}' is still active",
-                message_id
+                "Cannot send 'RUN_FINISHED' while text messages are still active: {message_id}"
+            )));
+        }
+
+        if !self.active_reasoning_messages.is_empty() {
+            let mut open = self
+                .active_reasoning_messages
+                .iter()
+                .cloned()
+                .collect::<Vec<_>>();
+            open.sort();
+            return Err(AgUiError::validation(format!(
+                "Cannot send 'RUN_FINISHED' while reasoning messages are still active: {}",
+                open.join(", ")
+            )));
+        }
+
+        if !self.active_reasoning_spans.is_empty() {
+            let mut open = self
+                .active_reasoning_spans
+                .iter()
+                .cloned()
+                .collect::<Vec<_>>();
+            open.sort();
+            return Err(AgUiError::validation(format!(
+                "Cannot send 'RUN_FINISHED' while reasoning spans are still active: {}",
+                open.join(", ")
             )));
         }
 
         if let Some(tool_call_id) = self.active_tool_call_id.as_deref() {
             return Err(AgUiError::validation(format!(
-                "Cannot send 'RUN_FINISHED' while tool call '{}' is still active",
-                tool_call_id
+                "Cannot send 'RUN_FINISHED' while tool calls are still active: {tool_call_id}"
             )));
-        }
-
-        if let Some(message_id) = self.active_reasoning_message_id.as_deref() {
-            return Err(AgUiError::validation(format!(
-                "Cannot send 'RUN_FINISHED' while reasoning message '{}' is still active",
-                message_id
-            )));
-        }
-
-        if self.active_thinking_message {
-            return Err(AgUiError::validation(
-                "Cannot send 'RUN_FINISHED' while a thinking message is still active",
-            ));
-        }
-
-        if self.active_thinking {
-            return Err(AgUiError::validation(
-                "Cannot send 'RUN_FINISHED' while a thinking step is still active",
-            ));
         }
 
         self.run_finished = true;
@@ -356,163 +363,74 @@ impl VerifierState {
         }
     }
 
+    /// Opens a reasoning SPAN. Checked against the opener's OWN set: a span
+    /// and the message inside it may share an id, so one set for both would
+    /// reject the canonical shape (upstream `verify/verify.ts:689-732`).
     fn start_reasoning(&mut self, message_id: &str) -> VerifyResult<()> {
-        if let Some(active) = self.active_reasoning_message_id.as_deref() {
+        if !self.active_reasoning_spans.insert(message_id.to_owned()) {
             return Err(AgUiError::validation(format!(
-                "Cannot send 'REASONING_START' event: A reasoning message with ID '{}' is already in progress. Complete it with 'REASONING_END' first.",
-                active
+                "Cannot send 'REASONING_START' event: A reasoning span with ID '{message_id}' is already in progress. Complete it with 'REASONING_END' first."
             )));
         }
-
-        self.active_reasoning_message_id = Some(message_id.to_owned());
-        self.active_reasoning_message_open = false;
         Ok(())
     }
 
+    /// Opens a reasoning MESSAGE. It requires no enclosing span — the span's
+    /// identifier "namespaces nothing" — so only a duplicate open is rejected.
     fn start_reasoning_message(&mut self, message_id: &str) -> VerifyResult<()> {
-        match self.active_reasoning_message_id.as_deref() {
-            Some(active) if active == message_id => {
-                if self.active_reasoning_message_open {
-                    return Err(AgUiError::validation(format!(
-                        "Cannot send 'REASONING_MESSAGE_START' event: Reasoning message '{}' is already in progress. Complete it with 'REASONING_MESSAGE_END' first.",
-                        message_id
-                    )));
-                }
-                self.active_reasoning_message_open = true;
-                Ok(())
-            }
-            _ => Err(AgUiError::validation(format!(
-                "Cannot send 'REASONING_MESSAGE_START' event: No active reasoning sequence found with ID '{}'. Start reasoning with 'REASONING_START' first.",
-                message_id
-            ))),
+        if !self.active_reasoning_messages.insert(message_id.to_owned()) {
+            return Err(AgUiError::validation(format!(
+                "Cannot send 'REASONING_MESSAGE_START' event: A reasoning message with ID '{message_id}' is already in progress. Complete it with 'REASONING_MESSAGE_END' first."
+            )));
         }
+        Ok(())
     }
 
-    fn reasoning_content(&self, message_id: &str) -> VerifyResult<()> {
-        match self.active_reasoning_message_id.as_deref() {
-            Some(active) if active == message_id && self.active_reasoning_message_open => Ok(()),
-            Some(active) if active == message_id => Err(AgUiError::validation(format!(
-                "Cannot send 'REASONING_MESSAGE_CONTENT' event: No active reasoning message found with ID '{}'. Start a reasoning message with 'REASONING_MESSAGE_START' first.",
-                message_id
-            ))),
-            _ => Err(AgUiError::validation(format!(
-                "Cannot send 'REASONING_MESSAGE_CONTENT' event: No active reasoning message found with ID '{}'. Start a reasoning message with 'REASONING_MESSAGE_START' first.",
-                message_id
-            ))),
+    /// A continuation must name something that is open. Content does not close;
+    /// only the matching `*_END` drops the OPEN flag.
+    fn continue_reasoning_message(&self, message_id: &str, event_name: &str) -> VerifyResult<()> {
+        if self.active_reasoning_messages.contains(message_id) {
+            return Ok(());
         }
-    }
-
-    fn reasoning_chunk(&self, message_id: Option<&str>) -> VerifyResult<()> {
-        match (self.active_reasoning_message_id.as_deref(), message_id) {
-            (Some(active), Some(message_id)) if active == message_id && self.active_reasoning_message_open => Ok(()),
-            (Some(_), None) if self.active_reasoning_message_open => Ok(()),
-            (_, Some(message_id)) => Err(AgUiError::validation(format!(
-                "Cannot send 'REASONING_MESSAGE_CHUNK' event: No active reasoning message found with ID '{}'. Start a reasoning message with 'REASONING_MESSAGE_START' first.",
-                message_id
-            ))),
-            _ => Err(AgUiError::validation(
-                "Cannot send 'REASONING_MESSAGE_CHUNK' event: No active reasoning message found. Start a reasoning message with 'REASONING_MESSAGE_START' first.",
-            )),
-        }
+        Err(AgUiError::validation(format!(
+            "Cannot send '{event_name}' event: No active reasoning message found with ID '{message_id}'. Start a reasoning message with 'REASONING_MESSAGE_START' first."
+        )))
     }
 
     fn end_reasoning_message(&mut self, message_id: &str) -> VerifyResult<()> {
-        match self.active_reasoning_message_id.as_deref() {
-            Some(active) if active == message_id && self.active_reasoning_message_open => {
-                self.active_reasoning_message_open = false;
-                Ok(())
-            }
-            _ => Err(AgUiError::validation(format!(
-                "Cannot send 'REASONING_MESSAGE_END' event: No active reasoning message found with ID '{}'. A 'REASONING_MESSAGE_START' event must be sent first.",
-                message_id
-            ))),
+        if !self.active_reasoning_messages.remove(message_id) {
+            return Err(AgUiError::validation(format!(
+                "Cannot send 'REASONING_MESSAGE_END' event: No active reasoning message found with ID '{message_id}'. A 'REASONING_MESSAGE_START' event must be sent first."
+            )));
         }
+        Ok(())
     }
 
+    /// Closes a reasoning SPAN, independently of any message it bracketed: a
+    /// span may end while its message is still open, and the message's own
+    /// `REASONING_MESSAGE_END` remains owed (upstream `verify/verify.ts:733-771`).
     fn end_reasoning(&mut self, message_id: &str) -> VerifyResult<()> {
-        match self.active_reasoning_message_id.as_deref() {
-            Some(active) if active == message_id => {
-                if self.active_reasoning_message_open {
-                    return Err(AgUiError::validation(format!(
-                        "Cannot send 'REASONING_END' event: Reasoning message '{}' is still in progress. Complete it with 'REASONING_MESSAGE_END' first.",
-                        message_id
-                    )));
-                }
-
-                self.active_reasoning_message_id = None;
-                Ok(())
-            }
-            _ => Err(AgUiError::validation(format!(
-                "Cannot send 'REASONING_END' event: No active reasoning sequence found with ID '{}'. A 'REASONING_START' event must be sent first.",
-                message_id
-            ))),
+        if !self.active_reasoning_spans.remove(message_id) {
+            return Err(AgUiError::validation(format!(
+                "Cannot send 'REASONING_END' event: No active reasoning span found with ID '{message_id}'. A 'REASONING_START' event must be sent first."
+            )));
         }
-    }
-
-    fn start_thinking(&mut self) -> VerifyResult<()> {
-        if self.active_thinking {
-            return Err(AgUiError::validation(
-                "Cannot send 'THINKING_START' event: A thinking step is already in progress. End it with 'THINKING_END' first.",
-            ));
-        }
-
-        self.active_thinking = true;
         Ok(())
     }
 
-    fn start_thinking_message(&mut self) -> VerifyResult<()> {
-        if !self.active_thinking {
-            return Err(AgUiError::validation(
-                "Cannot send 'THINKING_TEXT_MESSAGE_START' event: A thinking step is not in progress. Create one with 'THINKING_START' first.",
-            ));
+    /// A chunk is a continuation like content, so it must name an open message.
+    ///
+    /// ponytail: upstream has no `REASONING_MESSAGE_CHUNK` case at all
+    /// (`verify/verify.ts` switches on CONTENT/END, never CHUNK) — chunks are
+    /// expanded upstream of verification, so it is unobservable there. We keep
+    /// the check, rebased on the message set.
+    fn reasoning_chunk(&self, message_id: Option<&str>) -> VerifyResult<()> {
+        match message_id {
+            Some(message_id) => self.continue_reasoning_message(message_id, "REASONING_MESSAGE_CHUNK"),
+            None => Err(AgUiError::validation(
+                "Cannot send 'REASONING_MESSAGE_CHUNK' event: No active reasoning message found. Start a reasoning message with 'REASONING_MESSAGE_START' first.",
+            )),
         }
-
-        if self.active_thinking_message {
-            return Err(AgUiError::validation(
-                "Cannot send 'THINKING_TEXT_MESSAGE_START' event: A thinking message is already in progress. Complete it with 'THINKING_TEXT_MESSAGE_END' first.",
-            ));
-        }
-
-        self.active_thinking_message = true;
-        Ok(())
-    }
-
-    fn thinking_message_content(&self) -> VerifyResult<()> {
-        if !self.active_thinking_message {
-            return Err(AgUiError::validation(
-                "Cannot send 'THINKING_TEXT_MESSAGE_CONTENT' event: No active thinking message found. Start a message with 'THINKING_TEXT_MESSAGE_START' first.",
-            ));
-        }
-
-        Ok(())
-    }
-
-    fn end_thinking_message(&mut self) -> VerifyResult<()> {
-        if !self.active_thinking_message {
-            return Err(AgUiError::validation(
-                "Cannot send 'THINKING_TEXT_MESSAGE_END' event: No active thinking message found. A 'THINKING_TEXT_MESSAGE_START' event must be sent first.",
-            ));
-        }
-
-        self.active_thinking_message = false;
-        Ok(())
-    }
-
-    fn end_thinking(&mut self) -> VerifyResult<()> {
-        if !self.active_thinking {
-            return Err(AgUiError::validation(
-                "Cannot send 'THINKING_END' event: No active thinking step found. A 'THINKING_START' event must be sent first.",
-            ));
-        }
-
-        if self.active_thinking_message {
-            return Err(AgUiError::validation(
-                "Cannot send 'THINKING_END' event: A thinking message is still in progress. Complete it with 'THINKING_TEXT_MESSAGE_END' first.",
-            ));
-        }
-
-        self.active_thinking = false;
-        Ok(())
     }
 
     fn start_step(&mut self, step_name: &str) -> VerifyResult<()> {
@@ -541,16 +459,12 @@ impl VerifierState {
         self.active_text_message_id = None;
         self.active_tool_call_id = None;
         self.active_tool_call_parent_message_id = None;
-        self.active_reasoning_message_id = None;
-        self.active_reasoning_message_open = false;
-        self.active_thinking = false;
-        self.active_thinking_message = false;
+        self.active_reasoning_spans.clear();
+        self.active_reasoning_messages.clear();
         self.active_step_names.clear();
     }
 }
 
-// legacy: THINKING_* is upstream-deprecated but must still pass through for old streams.
-#[allow(deprecated)]
 fn event_name(event: &Event) -> &'static str {
     match event {
         Event::TextMessageStart(_) => "TEXT_MESSAGE_START",
@@ -581,11 +495,6 @@ fn event_name(event: &Event) -> &'static str {
         Event::ReasoningMessageChunk(_) => "REASONING_MESSAGE_CHUNK",
         Event::ReasoningEnd(_) => "REASONING_END",
         Event::ReasoningEncryptedValue(_) => "REASONING_ENCRYPTED_VALUE",
-        Event::ThinkingStart(_) => "THINKING_START",
-        Event::ThinkingEnd(_) => "THINKING_END",
-        Event::ThinkingTextMessageStart(_) => "THINKING_TEXT_MESSAGE_START",
-        Event::ThinkingTextMessageContent(_) => "THINKING_TEXT_MESSAGE_CONTENT",
-        Event::ThinkingTextMessageEnd(_) => "THINKING_TEXT_MESSAGE_END",
         Event::SubagentStarted(_) => "SUBAGENT_STARTED",
         Event::SubagentFinished(_) => "SUBAGENT_FINISHED",
         Event::SubagentError(_) => "SUBAGENT_ERROR",
@@ -593,16 +502,13 @@ fn event_name(event: &Event) -> &'static str {
 }
 
 #[cfg(test)]
-// legacy: THINKING_* is upstream-deprecated but must still pass through for old streams.
-#[allow(deprecated)]
 mod tests {
     use super::*;
+    use agui_rs_core::AttributableFields;
     use agui_rs_core::{
         factory, BaseEventFields, Event, ReasoningEndEvent, ReasoningMessageChunkEvent,
         ReasoningMessageContentEvent, ReasoningMessageEndEvent, ReasoningMessageRole,
-        ReasoningMessageStartEvent, ReasoningStartEvent, ThinkingEndEvent, ThinkingStartEvent,
-        ThinkingTextMessageContentEvent, ThinkingTextMessageEndEvent,
-        ThinkingTextMessageStartEvent, ToolCallChunkEvent, ToolCallStartEvent,
+        ReasoningMessageStartEvent, ReasoningStartEvent, ToolCallChunkEvent, ToolCallStartEvent,
     };
     use futures::stream;
 
@@ -628,6 +534,7 @@ mod tests {
             tool_call_name: "search".into(),
             parent_message_id: Some(parent_message_id.into()),
             base: BaseEventFields::default(),
+            attributable: AttributableFields::default(),
         })
     }
 
@@ -638,6 +545,7 @@ mod tests {
             parent_message_id: parent_message_id.map(str::to_owned),
             delta: Some("{}".into()),
             base: BaseEventFields::default(),
+            attributable: AttributableFields::default(),
         })
     }
 
@@ -645,6 +553,7 @@ mod tests {
         Event::ReasoningStart(ReasoningStartEvent {
             message_id: message_id.into(),
             base: BaseEventFields::default(),
+            attributable: AttributableFields::default(),
         })
     }
 
@@ -652,6 +561,7 @@ mod tests {
         Event::ReasoningMessageStart(ReasoningMessageStartEvent {
             message_id: message_id.into(),
             role: ReasoningMessageRole::Reasoning,
+            attributable: AttributableFields::default(),
             base: BaseEventFields::default(),
         })
     }
@@ -661,6 +571,7 @@ mod tests {
             message_id: message_id.into(),
             delta: delta.into(),
             base: BaseEventFields::default(),
+            attributable: AttributableFields::default(),
         })
     }
 
@@ -669,6 +580,7 @@ mod tests {
             message_id: message_id.map(str::to_owned),
             delta: Some(delta.into()),
             base: BaseEventFields::default(),
+            attributable: AttributableFields::default(),
         })
     }
 
@@ -676,6 +588,7 @@ mod tests {
         Event::ReasoningMessageEnd(ReasoningMessageEndEvent {
             message_id: message_id.into(),
             base: BaseEventFields::default(),
+            attributable: AttributableFields::default(),
         })
     }
 
@@ -683,33 +596,8 @@ mod tests {
         Event::ReasoningEnd(ReasoningEndEvent {
             message_id: message_id.into(),
             base: BaseEventFields::default(),
+            attributable: AttributableFields::default(),
         })
-    }
-
-    fn thinking_start() -> Event {
-        Event::ThinkingStart(ThinkingStartEvent {
-            title: None,
-            base: BaseEventFields::default(),
-        })
-    }
-
-    fn thinking_end() -> Event {
-        Event::ThinkingEnd(ThinkingEndEvent::default())
-    }
-
-    fn thinking_message_start() -> Event {
-        Event::ThinkingTextMessageStart(ThinkingTextMessageStartEvent::default())
-    }
-
-    fn thinking_message_content(delta: &str) -> Event {
-        Event::ThinkingTextMessageContent(ThinkingTextMessageContentEvent {
-            delta: delta.into(),
-            base: BaseEventFields::default(),
-        })
-    }
-
-    fn thinking_message_end() -> Event {
-        Event::ThinkingTextMessageEnd(ThinkingTextMessageEndEvent::default())
     }
 
     mod run_lifecycle {
@@ -916,13 +804,46 @@ mod tests {
         use super::*;
 
         #[tokio::test]
-        async fn rejects_reasoning_message_start_before_reasoning_start() {
+        async fn allows_reasoning_message_start_without_an_enclosing_span() {
+            // The span's identifier "namespaces nothing" and the messages inside
+            // carry their own ids, so a message opener requires no span.
             let items = collect(vec![
                 factory::run_started("thread", "run"),
                 reasoning_message_start("r1"),
+                reasoning_message_content("r1", "thinking"),
+                reasoning_message_end("r1"),
+                factory::run_finished("thread", "run"),
             ])
             .await;
-            assert_validation(&items[1], "No active reasoning sequence found with ID 'r1'");
+            assert!(items.iter().all(VerifyResult::is_ok));
+        }
+
+        #[tokio::test]
+        async fn rejects_a_second_reasoning_message_start_with_the_same_id() {
+            let items = collect(vec![
+                factory::run_started("thread", "run"),
+                reasoning_message_start("r1"),
+                reasoning_message_start("r1"),
+            ])
+            .await;
+            assert_validation(
+                &items[2],
+                "A reasoning message with ID 'r1' is already in progress. Complete it with 'REASONING_MESSAGE_END' first.",
+            );
+        }
+
+        #[tokio::test]
+        async fn rejects_a_second_reasoning_start_with_the_same_id() {
+            let items = collect(vec![
+                factory::run_started("thread", "run"),
+                reasoning_start("r1"),
+                reasoning_start("r1"),
+            ])
+            .await;
+            assert_validation(
+                &items[2],
+                "A reasoning span with ID 'r1' is already in progress. Complete it with 'REASONING_END' first.",
+            );
         }
 
         #[tokio::test]
@@ -949,15 +870,47 @@ mod tests {
         }
 
         #[tokio::test]
-        async fn rejects_reasoning_end_while_message_is_open() {
+        async fn closes_only_its_own_entity() {
+            // REASONING_END drops the SPAN's open flag and nothing else; the
+            // message's own REASONING_MESSAGE_END is still owed.
+            let items = collect(vec![
+                factory::run_started("thread", "run"),
+                reasoning_start("span"),
+                reasoning_message_start("msg"),
+                reasoning_end("span"),
+                reasoning_message_end("msg"),
+                factory::run_finished("thread", "run"),
+            ])
+            .await;
+            assert!(items.iter().all(VerifyResult::is_ok));
+        }
+
+        #[tokio::test]
+        async fn rejects_reasoning_end_for_a_span_nothing_opened() {
+            let items = collect(vec![
+                factory::run_started("thread", "run"),
+                reasoning_end("r1"),
+            ])
+            .await;
+            assert_validation(
+                &items[1],
+                "Cannot send 'REASONING_END' event: No active reasoning span found with ID 'r1'.",
+            );
+        }
+
+        #[tokio::test]
+        async fn lets_one_id_name_both_a_span_and_its_message() {
             let items = collect(vec![
                 factory::run_started("thread", "run"),
                 reasoning_start("r1"),
                 reasoning_message_start("r1"),
+                reasoning_message_content("r1", "a"),
+                reasoning_message_end("r1"),
                 reasoning_end("r1"),
+                factory::run_finished("thread", "run"),
             ])
             .await;
-            assert_validation(&items[3], "Reasoning message 'r1' is still in progress");
+            assert!(items.iter().all(VerifyResult::is_ok));
         }
 
         #[tokio::test]
@@ -970,69 +923,6 @@ mod tests {
                 reasoning_message_chunk(Some("r1"), "b"),
                 reasoning_message_end("r1"),
                 reasoning_end("r1"),
-                factory::run_finished("thread", "run"),
-            ])
-            .await;
-            assert!(items.iter().all(VerifyResult::is_ok));
-        }
-    }
-
-    mod thinking {
-        use super::*;
-
-        #[tokio::test]
-        async fn rejects_thinking_message_start_before_thinking_start() {
-            let items = collect(vec![
-                factory::run_started("thread", "run"),
-                thinking_message_start(),
-            ])
-            .await;
-            assert_validation(&items[1], "A thinking step is not in progress");
-        }
-
-        #[tokio::test]
-        async fn rejects_thinking_message_content_before_message_start() {
-            let items = collect(vec![
-                factory::run_started("thread", "run"),
-                thinking_start(),
-                thinking_message_content("hello"),
-            ])
-            .await;
-            assert_validation(&items[2], "No active thinking message found");
-        }
-
-        #[tokio::test]
-        async fn rejects_thinking_message_end_before_message_start() {
-            let items = collect(vec![
-                factory::run_started("thread", "run"),
-                thinking_start(),
-                thinking_message_end(),
-            ])
-            .await;
-            assert_validation(&items[2], "No active thinking message found");
-        }
-
-        #[tokio::test]
-        async fn rejects_thinking_end_while_message_is_open() {
-            let items = collect(vec![
-                factory::run_started("thread", "run"),
-                thinking_start(),
-                thinking_message_start(),
-                thinking_end(),
-            ])
-            .await;
-            assert_validation(&items[3], "A thinking message is still in progress");
-        }
-
-        #[tokio::test]
-        async fn allows_balanced_thinking_sequence() {
-            let items = collect(vec![
-                factory::run_started("thread", "run"),
-                thinking_start(),
-                thinking_message_start(),
-                thinking_message_content("hello"),
-                thinking_message_end(),
-                thinking_end(),
                 factory::run_finished("thread", "run"),
             ])
             .await;
@@ -1126,7 +1016,7 @@ mod tests {
             .await;
             assert_validation(
                 &items[2],
-                "Cannot send 'RUN_FINISHED' while text message 'm1' is still active",
+                "Cannot send 'RUN_FINISHED' while text messages are still active: m1",
             );
         }
 
@@ -1140,12 +1030,12 @@ mod tests {
             .await;
             assert_validation(
                 &items[2],
-                "Cannot send 'RUN_FINISHED' while tool call 'tc1' is still active",
+                "Cannot send 'RUN_FINISHED' while tool calls are still active: tc1",
             );
         }
 
         #[tokio::test]
-        async fn rejects_run_finished_with_active_reasoning() {
+        async fn rejects_run_finished_with_active_reasoning_span() {
             let items = collect(vec![
                 factory::run_started("thread", "run"),
                 reasoning_start("r1"),
@@ -1154,21 +1044,25 @@ mod tests {
             .await;
             assert_validation(
                 &items[2],
-                "Cannot send 'RUN_FINISHED' while reasoning message 'r1' is still active",
+                "Cannot send 'RUN_FINISHED' while reasoning spans are still active: r1",
             );
         }
 
         #[tokio::test]
-        async fn rejects_run_finished_with_active_thinking() {
+        async fn rejects_run_finished_with_active_reasoning_message() {
             let items = collect(vec![
                 factory::run_started("thread", "run"),
-                thinking_start(),
+                reasoning_start("r1"),
+                reasoning_message_start("r1"),
+                reasoning_end("r1"),
                 factory::run_finished("thread", "run"),
             ])
             .await;
+            // The span closed; the message inside it did not, and the two are
+            // tracked separately.
             assert_validation(
-                &items[2],
-                "Cannot send 'RUN_FINISHED' while a thinking step is still active",
+                &items[4],
+                "Cannot send 'RUN_FINISHED' while reasoning messages are still active: r1",
             );
         }
 
@@ -1202,16 +1096,11 @@ mod tests {
                 reasoning_message_content("r1", "thought"),
                 reasoning_message_end("r1"),
                 reasoning_end("r1"),
-                thinking_start(),
-                thinking_message_start(),
-                thinking_message_content("done"),
-                thinking_message_end(),
-                thinking_end(),
                 factory::step_finished("plan"),
                 factory::run_finished("thread", "run"),
             ])
             .await;
-            assert_eq!(items.len(), 20);
+            assert_eq!(items.len(), 15);
             assert!(items.iter().all(VerifyResult::is_ok));
         }
     }

@@ -156,7 +156,6 @@ mod abort_tests {
     use super::*;
     use agui_rs_core::{RunFinishedEvent, RunFinishedOutcome};
     use futures::StreamExt;
-    use serde_json::Value;
     use std::io::{Read, Write};
     use std::net::{TcpListener, TcpStream};
     use std::thread;
@@ -167,12 +166,13 @@ mod abort_tests {
         RunAgentInput {
             thread_id: "thread-1".into(),
             run_id: "run-1".into(),
+            protocol_version: None,
             parent_run_id: None,
-            state: Default::default(),
+            state: None,
             messages: vec![],
             tools: vec![],
             context: vec![],
-            forwarded_props: Value::Null,
+            forwarded_props: None,
             resume: None,
         }
     }
@@ -427,7 +427,9 @@ mod abort_tests {
         assert!(matches!(
             stream.next().await,
             Some(Ok(Event::RunFinished(RunFinishedEvent {
-                outcome: Some(RunFinishedOutcome::Success),
+                outcome: Some(RunFinishedOutcome::Success {
+                    pending_tool_call_ids: None,
+                }),
                 ..
             })))
         ));

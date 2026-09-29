@@ -166,7 +166,7 @@ async fn run_finished_while_text_message_is_active_errors() {
 
     assert_validation(
         &out[2],
-        "Cannot send 'RUN_FINISHED' while text message 'msg1' is still active",
+        "Cannot send 'RUN_FINISHED' while text messages are still active: msg1",
     );
 }
 
@@ -181,7 +181,7 @@ async fn run_finished_while_tool_call_is_active_errors() {
 
     assert_validation(
         &out[2],
-        "Cannot send 'RUN_FINISHED' while tool call 'tool1' is still active",
+        "Cannot send 'RUN_FINISHED' while tool calls are still active: tool1",
     );
 }
 

@@ -165,9 +165,9 @@ pub struct ExecutionCapabilities {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sandboxed: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub max_iterations: Option<f64>,
+    pub max_iterations: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub max_execution_time: Option<f64>,
+    pub max_execution_time: Option<u64>,
 }
 
 /// Human-in-the-loop interaction support.
@@ -252,7 +252,7 @@ mod capabilities_tests {
             }),
             execution: Some(ExecutionCapabilities {
                 code_execution: Some(true),
-                max_iterations: Some(10.0),
+                max_iterations: Some(10),
                 ..Default::default()
             }),
             ..Default::default()
@@ -262,7 +262,7 @@ mod capabilities_tests {
         assert_eq!(value["transport"]["httpBinary"], true);
         assert_eq!(value["state"]["persistentState"], true);
         assert_eq!(value["execution"]["codeExecution"], true);
-        assert_eq!(value["execution"]["maxIterations"], 10.0);
+        assert_eq!(value["execution"]["maxIterations"], 10);
     }
 
     #[test]

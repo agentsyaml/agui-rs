@@ -25,6 +25,7 @@ fn raw_event() -> Event {
         event: json!({ "type": "raw_data", "content": "test" }),
         source: None,
         base: BaseEventFields::default(),
+        attributable: AttributableFields::default(),
     })
 }
 
@@ -33,6 +34,7 @@ fn custom_event() -> Event {
         name: "test_event".into(),
         value: json!("test_value"),
         base: BaseEventFields::default(),
+        attributable: AttributableFields::default(),
     })
 }
 
@@ -49,6 +51,7 @@ fn tool_call_start_with_parent(tool_call_id: &str, parent_message_id: &str) -> E
         tool_call_name: "search".into(),
         parent_message_id: Some(parent_message_id.into()),
         base: BaseEventFields::default(),
+        attributable: AttributableFields::default(),
     })
 }
 
@@ -57,6 +60,7 @@ fn tool_call_result(message_id: &str, tool_call_id: &str, content: &str) -> Even
         message_id: message_id.into(),
         tool_call_id: tool_call_id.into(),
         content: content.into(),
+        attributable: AttributableFields::default(),
         role: Some(ToolResultRole::Tool),
         base: BaseEventFields::default(),
     })
@@ -258,6 +262,6 @@ async fn run_finished_with_active_tool_call_errors() {
 
     assert_validation(
         &out[2],
-        "Cannot send 'RUN_FINISHED' while tool call 'tc1' is still active",
+        "Cannot send 'RUN_FINISHED' while tool calls are still active: tc1",
     );
 }

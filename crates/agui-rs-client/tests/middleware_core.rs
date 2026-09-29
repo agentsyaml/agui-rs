@@ -17,6 +17,8 @@ mod middleware;
 mod subscriber;
 #[path = "../src/verify.rs"]
 mod verify;
+#[path = "../src/version.rs"]
+mod version;
 
 use agui_rs_core::{
     factory, BaseEventFields, Event, RunAgentInput, RunFinishedEvent, RunFinishedOutcome,
@@ -95,7 +97,9 @@ async fn middleware_can_modify_the_event_stream() {
                 thread_id: "test-thread".into(),
                 run_id: "test-run".into(),
                 result: Some(json!({"success": true})),
-                outcome: Some(RunFinishedOutcome::Success),
+                outcome: Some(RunFinishedOutcome::Success {
+                    pending_tool_call_ids: None,
+                }),
                 usage: Vec::new(),
                 base: BaseEventFields::default(),
             }),
@@ -119,7 +123,12 @@ async fn middleware_can_modify_the_event_stream() {
         .expect("run should succeed");
 
     assert!(result.new_messages.is_empty());
-    assert_eq!(result.outcome, Some(RunFinishedOutcome::Success));
+    assert_eq!(
+        result.outcome,
+        Some(RunFinishedOutcome::Success {
+            pending_tool_call_ids: None,
+        })
+    );
 
     let seen_inputs = seen_inputs.lock().expect("seen inputs lock");
     assert_eq!(seen_inputs.len(), 1);

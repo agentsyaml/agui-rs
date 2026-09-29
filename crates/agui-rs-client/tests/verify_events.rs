@@ -1,7 +1,7 @@
 use agui_rs_client::verify_events;
 use agui_rs_core::{
-    factory, AgUiError, BaseEventFields, CustomEvent, Event, MessagesSnapshotEvent, RawEvent,
-    StateDeltaEvent, StateSnapshotEvent,
+    factory, AgUiError, AttributableFields, BaseEventFields, CustomEvent, Event,
+    MessagesSnapshotEvent, RawEvent, StateDeltaEvent, StateSnapshotEvent,
 };
 use futures::{stream, StreamExt};
 use serde_json::{json, Value};
@@ -29,6 +29,7 @@ fn custom_event(name: &str, value: Value) -> Event {
         name: name.into(),
         value,
         base: BaseEventFields::default(),
+        attributable: AttributableFields::default(),
     })
 }
 
@@ -37,6 +38,7 @@ fn raw_event() -> Event {
         event: json!({"type": "raw_data", "content": "test"}),
         source: None,
         base: BaseEventFields::default(),
+        attributable: AttributableFields::default(),
     })
 }
 
@@ -44,6 +46,7 @@ fn state_snapshot() -> Event {
     Event::StateSnapshot(StateSnapshotEvent {
         snapshot: json!({"state": "initial", "data": {"foo": "bar"}}),
         base: BaseEventFields::default(),
+        attributable: AttributableFields::default(),
     })
 }
 
@@ -51,6 +54,7 @@ fn state_delta() -> Event {
     Event::StateDelta(StateDeltaEvent {
         delta: vec![json!({"op": "add", "path": "/result", "value": "success"})],
         base: BaseEventFields::default(),
+        attributable: AttributableFields::default(),
     })
 }
 

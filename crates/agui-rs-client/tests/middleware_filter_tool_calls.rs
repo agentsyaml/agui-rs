@@ -5,7 +5,8 @@
 mod middleware;
 
 use agui_rs_core::{
-    factory, BaseEventFields, Event, RunFinishedEvent, ToolCallResultEvent, ToolResultRole,
+    factory, AttributableFields, BaseEventFields, Event, RunFinishedEvent, ToolCallResultEvent,
+    ToolResultRole,
 };
 use futures::{stream, StreamExt};
 use middleware::filter_tool_calls::{FilterToolCallsConfig, FilterToolCallsMiddleware};
@@ -20,7 +21,8 @@ fn tool_events(tool_call_id: &str, tool_name: &str) -> Vec<Event> {
         Event::ToolCallResult(ToolCallResultEvent {
             message_id: format!("tool-message-{tool_call_id}"),
             tool_call_id: tool_call_id.into(),
-            content: format!("result-{tool_name}"),
+            content: format!("result-{tool_name}").into(),
+            attributable: AttributableFields::default(),
             role: Some(ToolResultRole::Tool),
             base: BaseEventFields::default(),
         }),

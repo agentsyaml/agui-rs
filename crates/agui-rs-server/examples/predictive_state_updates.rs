@@ -14,7 +14,7 @@
 //! Run with:
 //!   cargo run -p agui-rs-server --example predictive_state_updates
 
-use agui_rs_core::{factory, CustomEvent, Event, Message, Result, RunAgentInput};
+use agui_rs_core::{event_factories, factory, Event, Message, Result, RunAgentInput};
 use agui_rs_server::{agui_router, channel, serve, EventEmitter, RunHandler};
 use futures::stream::BoxStream;
 use serde_json::json;
@@ -73,15 +73,16 @@ async fn send_tool_call_events(emitter: &EventEmitter, run_id: &str) {
         format!("Once upon a time, there was a dog named {name}. {name} was a very good dog.");
 
     let _ = emitter
-        .emit(Event::Custom(CustomEvent {
-            name: "PredictState".into(),
-            value: json!([{
+        .emit(event_factories::create_custom_event(
+            "PredictState",
+            json!([{
                 "state_key": "document",
                 "tool": "write_document_local",
                 "tool_argument": "document"
             }]),
-            base: Default::default(),
-        }))
+            None,
+            None,
+        ))
         .await;
 
     let tool_call_id = format!("tc-{run_id}-write");

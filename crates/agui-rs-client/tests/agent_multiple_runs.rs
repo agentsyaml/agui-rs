@@ -1,6 +1,7 @@
 use agui_rs_client::default_apply_events;
 use agui_rs_core::{
-    ActivitySnapshotEvent, BaseEventFields, Message, RunFinishedOutcome, TextMessageRole,
+    ActivitySnapshotEvent, AttributableFields, BaseEventFields, Message, RunFinishedOutcome,
+    TextMessageRole,
 };
 use futures::{stream, StreamExt};
 use serde_json::{Map, Value};
@@ -43,6 +44,7 @@ async fn should_accumulate_messages_across_multiple_sequential_runs() {
             agui_rs_core::Event::TextMessageStart(agui_rs_core::TextMessageStartEvent {
                 message_id: "msg-1".into(),
                 role: TextMessageRole::Assistant,
+                attributable: AttributableFields::default(),
                 name: None,
                 base: BaseEventFields::default(),
             }),
@@ -63,6 +65,7 @@ async fn should_accumulate_messages_across_multiple_sequential_runs() {
             agui_rs_core::Event::TextMessageStart(agui_rs_core::TextMessageStartEvent {
                 message_id: "msg-2".into(),
                 role: TextMessageRole::Assistant,
+                attributable: AttributableFields::default(),
                 name: None,
                 base: BaseEventFields::default(),
             }),
@@ -104,6 +107,7 @@ async fn should_handle_three_sequential_runs_with_message_accumulation() {
                 agui_rs_core::Event::TextMessageStart(agui_rs_core::TextMessageStartEvent {
                     message_id: format!("msg-{}", index + 1),
                     role: TextMessageRole::Assistant,
+                    attributable: AttributableFields::default(),
                     name: None,
                     base: BaseEventFields::default(),
                 }),
@@ -138,6 +142,8 @@ async fn should_handle_three_sequential_runs_with_message_accumulation() {
 async fn should_start_with_initial_messages_and_accumulate_new_ones() {
     let initial_messages = vec![Message::User(UserMessage {
         id: "initial-1".into(),
+        metadata: None,
+        subagent_run_id: None,
         content: agui_rs_core::UserMessageContent::Text("Initial message".into()),
         name: None,
         encrypted_value: None,
@@ -149,6 +155,7 @@ async fn should_start_with_initial_messages_and_accumulate_new_ones() {
             agui_rs_core::Event::TextMessageStart(agui_rs_core::TextMessageStartEvent {
                 message_id: "msg-1".into(),
                 role: TextMessageRole::Assistant,
+                attributable: AttributableFields::default(),
                 name: None,
                 base: BaseEventFields::default(),
             }),
@@ -188,14 +195,17 @@ async fn should_retain_activity_messages_across_runs() {
                 message_id: "activity-1".into(),
                 activity_type: "PLAN".into(),
                 content: activity_content(&["task 1"]),
-                replace: true,
+                attributable: AttributableFields::default(),
+                replace: Some(true),
                 base: BaseEventFields::default(),
             }),
             agui_rs_core::Event::RunFinished(agui_rs_core::RunFinishedEvent {
                 thread_id: "test-thread".into(),
                 run_id: "run-1".into(),
                 result: None,
-                outcome: Some(RunFinishedOutcome::Success),
+                outcome: Some(RunFinishedOutcome::Success {
+                    pending_tool_call_ids: None,
+                }),
                 usage: Vec::new(),
                 base: BaseEventFields::default(),
             }),
@@ -214,6 +224,7 @@ async fn should_retain_activity_messages_across_runs() {
             agui_rs_core::Event::TextMessageStart(agui_rs_core::TextMessageStartEvent {
                 message_id: "msg-2".into(),
                 role: TextMessageRole::Assistant,
+                attributable: AttributableFields::default(),
                 name: None,
                 base: BaseEventFields::default(),
             }),

@@ -7,7 +7,9 @@
 use agui_rs_client::{parse_proto_stream, AGUI_MEDIA_TYPE_PROTOBUF};
 use agui_rs_core::types::AssistantMessage;
 use agui_rs_core::Message;
-use agui_rs_core::{factory, BaseEventFields, Event, MessagesSnapshotEvent, StateDeltaEvent};
+use agui_rs_core::{
+    factory, AttributableFields, BaseEventFields, Event, MessagesSnapshotEvent, StateDeltaEvent,
+};
 use agui_rs_encoder::EventEncoder;
 use futures::{stream, StreamExt};
 use serde_json::json;
@@ -83,6 +85,7 @@ async fn round_trips_state_delta_with_json_patch_operations() {
             json!({"op": "add", "path": "/items/-", "value": "x"}),
         ],
         base: BaseEventFields::default(),
+        attributable: AttributableFields::default(),
     });
     let out = decode_bytes(vec![encode_all(&[event])]).await;
     assert_eq!(out.len(), 1);
@@ -95,6 +98,7 @@ async fn round_trips_state_delta_with_json_patch_operations() {
             json!({"op": "add", "path": "/items/-", "value": "x"}),
         ],
         base: BaseEventFields::default(),
+        attributable: AttributableFields::default(),
     });
     assert_eq!(out[0].as_ref().unwrap(), &expected);
 }
@@ -104,6 +108,8 @@ async fn round_trips_messages_snapshot() {
     let event = Event::MessagesSnapshot(MessagesSnapshotEvent {
         messages: vec![Message::Assistant(AssistantMessage {
             id: "a1".into(),
+            metadata: None,
+            subagent_run_id: None,
             content: Some("hi".into()),
             name: None,
             tool_calls: None,

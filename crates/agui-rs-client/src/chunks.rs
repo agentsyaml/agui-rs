@@ -1,9 +1,9 @@
 use agui_rs_core::{
-    AgUiError, BaseEventFields, Event, ReasoningMessageChunkEvent, ReasoningMessageContentEvent,
-    ReasoningMessageEndEvent, ReasoningMessageRole, ReasoningMessageStartEvent, Result,
-    TextMessageChunkEvent, TextMessageContentEvent, TextMessageEndEvent, TextMessageRole,
-    TextMessageStartEvent, ToolCallArgsEvent, ToolCallChunkEvent, ToolCallEndEvent,
-    ToolCallStartEvent,
+    AgUiError, AttributableFields, BaseEventFields, Event, ReasoningMessageChunkEvent,
+    ReasoningMessageContentEvent, ReasoningMessageEndEvent, ReasoningMessageRole,
+    ReasoningMessageStartEvent, Result, TextMessageChunkEvent, TextMessageContentEvent,
+    TextMessageEndEvent, TextMessageRole, TextMessageStartEvent, ToolCallArgsEvent,
+    ToolCallChunkEvent, ToolCallEndEvent, ToolCallStartEvent,
 };
 use async_stream::try_stream;
 use futures::{stream::BoxStream, Stream, StreamExt};
@@ -27,15 +27,18 @@ impl OpenChunk {
             OpenChunk::Text { message_id } => Event::TextMessageEnd(TextMessageEndEvent {
                 message_id,
                 base: BaseEventFields::default(),
+                attributable: AttributableFields::default(),
             }),
             OpenChunk::Tool { tool_call_id } => Event::ToolCallEnd(ToolCallEndEvent {
                 tool_call_id,
                 base: BaseEventFields::default(),
+                attributable: AttributableFields::default(),
             }),
             OpenChunk::Reasoning { message_id } => {
                 Event::ReasoningMessageEnd(ReasoningMessageEndEvent {
                     message_id,
                     base: BaseEventFields::default(),
+                    attributable: AttributableFields::default(),
                 })
             }
         }
@@ -121,6 +124,7 @@ fn expand_text_chunk(
             role: chunk.role.unwrap_or(TextMessageRole::Assistant),
             name: chunk.name,
             base: BaseEventFields::default(),
+            attributable: AttributableFields::default(),
         }));
     }
 
@@ -132,6 +136,7 @@ fn expand_text_chunk(
             message_id: message_id.clone(),
             delta,
             base: BaseEventFields::default(),
+            attributable: AttributableFields::default(),
         }));
     }
 
@@ -169,6 +174,7 @@ fn expand_tool_chunk(
             tool_call_name,
             parent_message_id: chunk.parent_message_id,
             base: BaseEventFields::default(),
+            attributable: AttributableFields::default(),
         }));
     }
 
@@ -180,6 +186,7 @@ fn expand_tool_chunk(
             tool_call_id: tool_call_id.clone(),
             delta,
             base: BaseEventFields::default(),
+            attributable: AttributableFields::default(),
         }));
     }
 
@@ -213,6 +220,7 @@ fn expand_reasoning_chunk(
             message_id,
             role: ReasoningMessageRole::Reasoning,
             base: BaseEventFields::default(),
+            attributable: AttributableFields::default(),
         }));
     }
 
@@ -225,6 +233,7 @@ fn expand_reasoning_chunk(
                 message_id: message_id.clone(),
                 delta,
                 base: BaseEventFields::default(),
+                attributable: AttributableFields::default(),
             },
         ));
     }
@@ -255,6 +264,7 @@ mod tests {
         let events = collect_ok(vec![Event::TextMessageChunk(TextMessageChunkEvent {
             message_id: Some("m1".into()),
             role: Some(TextMessageRole::Assistant),
+            attributable: AttributableFields::default(),
             delta: Some("hello".into()),
             name: None,
             base: BaseEventFields::default(),
@@ -272,6 +282,7 @@ mod tests {
             Event::TextMessageChunk(TextMessageChunkEvent {
                 message_id: Some("m1".into()),
                 role: Some(TextMessageRole::Assistant),
+                attributable: AttributableFields::default(),
                 delta: Some("hel".into()),
                 name: None,
                 base: BaseEventFields::default(),
@@ -279,6 +290,7 @@ mod tests {
             Event::TextMessageChunk(TextMessageChunkEvent {
                 message_id: None,
                 role: None,
+                attributable: AttributableFields::default(),
                 delta: Some("lo".into()),
                 name: None,
                 base: BaseEventFields::default(),
@@ -299,6 +311,7 @@ mod tests {
             Event::TextMessageChunk(TextMessageChunkEvent {
                 message_id: Some("m1".into()),
                 role: Some(TextMessageRole::Assistant),
+                attributable: AttributableFields::default(),
                 delta: Some("one".into()),
                 name: None,
                 base: BaseEventFields::default(),
@@ -306,6 +319,7 @@ mod tests {
             Event::TextMessageChunk(TextMessageChunkEvent {
                 message_id: Some("m2".into()),
                 role: Some(TextMessageRole::Assistant),
+                attributable: AttributableFields::default(),
                 delta: Some("two".into()),
                 name: None,
                 base: BaseEventFields::default(),
@@ -329,6 +343,7 @@ mod tests {
             parent_message_id: Some("m1".into()),
             delta: Some("{".into()),
             base: BaseEventFields::default(),
+            attributable: AttributableFields::default(),
         })])
         .await;
 
@@ -346,6 +361,7 @@ mod tests {
                 parent_message_id: None,
                 delta: Some("{\"q\":\"".into()),
                 base: BaseEventFields::default(),
+                attributable: AttributableFields::default(),
             }),
             Event::ToolCallChunk(ToolCallChunkEvent {
                 tool_call_id: None,
@@ -353,6 +369,7 @@ mod tests {
                 parent_message_id: None,
                 delta: Some("rust\"}".into()),
                 base: BaseEventFields::default(),
+                attributable: AttributableFields::default(),
             }),
         ])
         .await;
@@ -380,6 +397,7 @@ mod tests {
                     message_id: Some("r1".into()),
                     delta: Some("plan".into()),
                     base: BaseEventFields::default(),
+                    attributable: AttributableFields::default(),
                 },
             )])
             .await;
@@ -396,11 +414,13 @@ mod tests {
                     message_id: Some("r1".into()),
                     delta: Some("pla".into()),
                     base: BaseEventFields::default(),
+                    attributable: AttributableFields::default(),
                 }),
                 Event::ReasoningMessageChunk(ReasoningMessageChunkEvent {
                     message_id: None,
                     delta: Some("n".into()),
                     base: BaseEventFields::default(),
+                    attributable: AttributableFields::default(),
                 }),
             ])
             .await;
@@ -419,11 +439,13 @@ mod tests {
                     message_id: Some("r1".into()),
                     delta: Some("one".into()),
                     base: BaseEventFields::default(),
+                    attributable: AttributableFields::default(),
                 }),
                 Event::ReasoningMessageChunk(ReasoningMessageChunkEvent {
                     message_id: Some("r2".into()),
                     delta: Some("two".into()),
                     base: BaseEventFields::default(),
+                    attributable: AttributableFields::default(),
                 }),
             ])
             .await;
@@ -443,17 +465,20 @@ mod tests {
                     message_id: Some("r1".into()),
                     delta: Some("a".into()),
                     base: BaseEventFields::default(),
+                    attributable: AttributableFields::default(),
                 }),
                 Event::ReasoningEncryptedValue(ReasoningEncryptedValueEvent {
                     subtype: ReasoningEncryptedValueSubtype::Message,
                     entity_id: "r1".into(),
                     encrypted_value: "secret".into(),
+                    attributable: AttributableFields::default(),
                     base: BaseEventFields::default(),
                 }),
                 Event::ReasoningMessageChunk(ReasoningMessageChunkEvent {
                     message_id: None,
                     delta: Some("b".into()),
                     base: BaseEventFields::default(),
+                    attributable: AttributableFields::default(),
                 }),
             ])
             .await;

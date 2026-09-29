@@ -1,4 +1,4 @@
-use crate::types::{Interrupt, Message, RunAgentInput, State, TextMessageRole};
+use crate::types::{Interrupt, Message, RunAgentInput, State, TextMessageRole, ToolResultContent};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 
@@ -11,6 +11,7 @@ where
     Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
 }
 
+/// `BaseEvent`: the fields every event carries, whatever its type.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct BaseEventFields {
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -19,6 +20,17 @@ pub struct BaseEventFields {
     pub raw_event: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub metadata: Option<Value>,
+}
+
+/// `Attributable`: composed into everything that can belong to a subagent's
+/// work. Run-scoped and conversation-wide events omit it, as do the
+/// SUBAGENT_* events, which name the subagent in a required field of their own
+/// instead of attributing themselves to one.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AttributableFields {
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub subagent_run_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -59,17 +71,6 @@ pub enum EventType {
     ReasoningEnd,
     ReasoningEncryptedValue,
 
-    #[deprecated(note = "use REASONING_* instead")]
-    ThinkingStart,
-    #[deprecated(note = "use REASONING_* instead")]
-    ThinkingEnd,
-    #[deprecated(note = "use REASONING_* instead")]
-    ThinkingTextMessageStart,
-    #[deprecated(note = "use REASONING_* instead")]
-    ThinkingTextMessageContent,
-    #[deprecated(note = "use REASONING_* instead")]
-    ThinkingTextMessageEnd,
-
     SubagentStarted,
     SubagentFinished,
     SubagentError,
@@ -85,6 +86,8 @@ pub struct TextMessageStartEvent {
     pub name: Option<String>,
     #[serde(flatten)]
     pub base: BaseEventFields,
+    #[serde(flatten)]
+    pub attributable: AttributableFields,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -94,6 +97,8 @@ pub struct TextMessageContentEvent {
     pub delta: String,
     #[serde(flatten)]
     pub base: BaseEventFields,
+    #[serde(flatten)]
+    pub attributable: AttributableFields,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -102,6 +107,8 @@ pub struct TextMessageEndEvent {
     pub message_id: String,
     #[serde(flatten)]
     pub base: BaseEventFields,
+    #[serde(flatten)]
+    pub attributable: AttributableFields,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -117,6 +124,8 @@ pub struct TextMessageChunkEvent {
     pub name: Option<String>,
     #[serde(flatten)]
     pub base: BaseEventFields,
+    #[serde(flatten)]
+    pub attributable: AttributableFields,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -128,6 +137,8 @@ pub struct ToolCallStartEvent {
     pub parent_message_id: Option<String>,
     #[serde(flatten)]
     pub base: BaseEventFields,
+    #[serde(flatten)]
+    pub attributable: AttributableFields,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -137,6 +148,8 @@ pub struct ToolCallArgsEvent {
     pub delta: String,
     #[serde(flatten)]
     pub base: BaseEventFields,
+    #[serde(flatten)]
+    pub attributable: AttributableFields,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -145,6 +158,8 @@ pub struct ToolCallEndEvent {
     pub tool_call_id: String,
     #[serde(flatten)]
     pub base: BaseEventFields,
+    #[serde(flatten)]
+    pub attributable: AttributableFields,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -160,6 +175,8 @@ pub struct ToolCallChunkEvent {
     pub delta: Option<String>,
     #[serde(flatten)]
     pub base: BaseEventFields,
+    #[serde(flatten)]
+    pub attributable: AttributableFields,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -173,11 +190,13 @@ pub enum ToolResultRole {
 pub struct ToolCallResultEvent {
     pub message_id: String,
     pub tool_call_id: String,
-    pub content: String,
+    pub content: ToolResultContent,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub role: Option<ToolResultRole>,
     #[serde(flatten)]
     pub base: BaseEventFields,
+    #[serde(flatten)]
+    pub attributable: AttributableFields,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -186,6 +205,8 @@ pub struct StateSnapshotEvent {
     pub snapshot: State,
     #[serde(flatten)]
     pub base: BaseEventFields,
+    #[serde(flatten)]
+    pub attributable: AttributableFields,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -194,6 +215,8 @@ pub struct StateDeltaEvent {
     pub delta: Vec<Value>,
     #[serde(flatten)]
     pub base: BaseEventFields,
+    #[serde(flatten)]
+    pub attributable: AttributableFields,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -204,20 +227,20 @@ pub struct MessagesSnapshotEvent {
     pub base: BaseEventFields,
 }
 
-fn default_true() -> bool {
-    true
-}
-
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ActivitySnapshotEvent {
     pub message_id: String,
     pub activity_type: String,
     pub content: serde_json::Map<String, Value>,
-    #[serde(default = "default_true")]
-    pub replace: bool,
+    /// Absent means the snapshot overwrites the activity's existing content;
+    /// only an explicit `false` asks a consumer to leave what is there.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub replace: Option<bool>,
     #[serde(flatten)]
     pub base: BaseEventFields,
+    #[serde(flatten)]
+    pub attributable: AttributableFields,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -228,6 +251,8 @@ pub struct ActivityDeltaEvent {
     pub patch: Vec<Value>,
     #[serde(flatten)]
     pub base: BaseEventFields,
+    #[serde(flatten)]
+    pub attributable: AttributableFields,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -238,6 +263,8 @@ pub struct RawEvent {
     pub source: Option<String>,
     #[serde(flatten)]
     pub base: BaseEventFields,
+    #[serde(flatten)]
+    pub attributable: AttributableFields,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -247,6 +274,8 @@ pub struct CustomEvent {
     pub value: Value,
     #[serde(flatten)]
     pub base: BaseEventFields,
+    #[serde(flatten)]
+    pub attributable: AttributableFields,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -254,6 +283,11 @@ pub struct CustomEvent {
 pub struct RunStartedEvent {
     pub thread_id: String,
     pub run_id: String,
+    /// The protocol version this producer speaks, such as `"1.0"`. Not an echo
+    /// of the input's: each side declares itself, so a consumer sees a
+    /// downgrade the moment it happens.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub protocol_version: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub parent_run_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -265,10 +299,30 @@ pub struct RunStartedEvent {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum RunFinishedOutcome {
-    Success,
-    Interrupt { interrupts: Vec<Interrupt> },
+    Success {
+        /// Tool calls this run started and left unanswered, for the application
+        /// to answer in the next input's messages. Absent or empty means the
+        /// producer named none and a consumer derives the list from the stream.
+        #[serde(
+            rename = "pendingToolCallIds",
+            skip_serializing_if = "Option::is_none",
+            default
+        )]
+        pending_tool_call_ids: Option<Vec<String>>,
+    },
+    Interrupt {
+        interrupts: Vec<Interrupt>,
+    },
+    /// Stopped before completing, by whoever was running it, without failing.
+    /// Named here because an outcome a consumer does not recognise is stripped
+    /// and read as success.
+    Cancelled,
 }
 
+/// Token counts for one provider and model, in the protocol's own accounting:
+/// `input_tokens`/`output_tokens` are the totals and `total_tokens` is their
+/// sum, while `reasoning_tokens`, `cached_input_tokens` and
+/// `cache_write_input_tokens` are parts of those totals — never additions.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TokenUsage {
@@ -286,6 +340,8 @@ pub struct TokenUsage {
     pub reasoning_tokens: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub cached_input_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub cache_write_input_tokens: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -295,6 +351,7 @@ pub struct RunFinishedEvent {
     pub run_id: String,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub result: Option<Value>,
+    /// Absent means success.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub outcome: Option<RunFinishedOutcome>,
     #[serde(
@@ -329,6 +386,8 @@ pub struct StepStartedEvent {
     pub step_name: String,
     #[serde(flatten)]
     pub base: BaseEventFields,
+    #[serde(flatten)]
+    pub attributable: AttributableFields,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -337,6 +396,8 @@ pub struct StepFinishedEvent {
     pub step_name: String,
     #[serde(flatten)]
     pub base: BaseEventFields,
+    #[serde(flatten)]
+    pub attributable: AttributableFields,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -345,8 +406,12 @@ pub struct ReasoningStartEvent {
     pub message_id: String,
     #[serde(flatten)]
     pub base: BaseEventFields,
+    #[serde(flatten)]
+    pub attributable: AttributableFields,
 }
 
+/// `role` on `ReasoningMessageStartEvent` is fixed at `"reasoning"`, so the
+/// wire value is not a choice a producer gets to make.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ReasoningMessageRole {
@@ -360,6 +425,8 @@ pub struct ReasoningMessageStartEvent {
     pub role: ReasoningMessageRole,
     #[serde(flatten)]
     pub base: BaseEventFields,
+    #[serde(flatten)]
+    pub attributable: AttributableFields,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -369,6 +436,8 @@ pub struct ReasoningMessageContentEvent {
     pub delta: String,
     #[serde(flatten)]
     pub base: BaseEventFields,
+    #[serde(flatten)]
+    pub attributable: AttributableFields,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -377,6 +446,8 @@ pub struct ReasoningMessageEndEvent {
     pub message_id: String,
     #[serde(flatten)]
     pub base: BaseEventFields,
+    #[serde(flatten)]
+    pub attributable: AttributableFields,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -388,6 +459,8 @@ pub struct ReasoningMessageChunkEvent {
     pub delta: Option<String>,
     #[serde(flatten)]
     pub base: BaseEventFields,
+    #[serde(flatten)]
+    pub attributable: AttributableFields,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -396,6 +469,8 @@ pub struct ReasoningEndEvent {
     pub message_id: String,
     #[serde(flatten)]
     pub base: BaseEventFields,
+    #[serde(flatten)]
+    pub attributable: AttributableFields,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -413,49 +488,55 @@ pub struct ReasoningEncryptedValueEvent {
     pub encrypted_value: String,
     #[serde(flatten)]
     pub base: BaseEventFields,
+    #[serde(flatten)]
+    pub attributable: AttributableFields,
 }
 
+// ponytail: large_enum_variant is allowed on purpose — RUN_STARTED embeds
+// RunAgentInput by value, so boxing it to satisfy the size ratio would cost an
+// allocation per run and an indirection in every match for no real saving.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-#[deprecated(note = "use REASONING_* instead")]
-pub struct ThinkingStartEvent {
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub title: Option<String>,
-    #[serde(flatten)]
-    pub base: BaseEventFields,
-}
+#[serde(tag = "type", rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum Event {
+    TextMessageStart(TextMessageStartEvent),
+    TextMessageContent(TextMessageContentEvent),
+    TextMessageEnd(TextMessageEndEvent),
+    TextMessageChunk(TextMessageChunkEvent),
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-#[deprecated(note = "use REASONING_* instead")]
-pub struct ThinkingEndEvent {
-    #[serde(flatten)]
-    pub base: BaseEventFields,
-}
+    ToolCallStart(ToolCallStartEvent),
+    ToolCallArgs(ToolCallArgsEvent),
+    ToolCallEnd(ToolCallEndEvent),
+    ToolCallChunk(ToolCallChunkEvent),
+    ToolCallResult(ToolCallResultEvent),
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-#[deprecated(note = "use REASONING_* instead")]
-pub struct ThinkingTextMessageStartEvent {
-    #[serde(flatten)]
-    pub base: BaseEventFields,
-}
+    StateSnapshot(StateSnapshotEvent),
+    StateDelta(StateDeltaEvent),
+    MessagesSnapshot(MessagesSnapshotEvent),
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-#[deprecated(note = "use REASONING_* instead")]
-pub struct ThinkingTextMessageContentEvent {
-    pub delta: String,
-    #[serde(flatten)]
-    pub base: BaseEventFields,
-}
+    ActivitySnapshot(ActivitySnapshotEvent),
+    ActivityDelta(ActivityDeltaEvent),
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-#[deprecated(note = "use REASONING_* instead")]
-pub struct ThinkingTextMessageEndEvent {
-    #[serde(flatten)]
-    pub base: BaseEventFields,
+    Raw(RawEvent),
+    Custom(CustomEvent),
+
+    RunStarted(RunStartedEvent),
+    RunFinished(RunFinishedEvent),
+    RunError(RunErrorEvent),
+    StepStarted(StepStartedEvent),
+    StepFinished(StepFinishedEvent),
+
+    ReasoningStart(ReasoningStartEvent),
+    ReasoningMessageStart(ReasoningMessageStartEvent),
+    ReasoningMessageContent(ReasoningMessageContentEvent),
+    ReasoningMessageEnd(ReasoningMessageEndEvent),
+    ReasoningMessageChunk(ReasoningMessageChunkEvent),
+    ReasoningEnd(ReasoningEndEvent),
+    ReasoningEncryptedValue(ReasoningEncryptedValueEvent),
+
+    SubagentStarted(SubagentStartedEvent),
+    SubagentFinished(SubagentFinishedEvent),
+    SubagentError(SubagentErrorEvent),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -515,73 +596,12 @@ pub struct SubagentErrorEvent {
     pub base: BaseEventFields,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum Event {
-    TextMessageStart(TextMessageStartEvent),
-    TextMessageContent(TextMessageContentEvent),
-    TextMessageEnd(TextMessageEndEvent),
-    TextMessageChunk(TextMessageChunkEvent),
-
-    ToolCallStart(ToolCallStartEvent),
-    ToolCallArgs(ToolCallArgsEvent),
-    ToolCallEnd(ToolCallEndEvent),
-    ToolCallChunk(ToolCallChunkEvent),
-    ToolCallResult(ToolCallResultEvent),
-
-    StateSnapshot(StateSnapshotEvent),
-    StateDelta(StateDeltaEvent),
-    MessagesSnapshot(MessagesSnapshotEvent),
-
-    ActivitySnapshot(ActivitySnapshotEvent),
-    ActivityDelta(ActivityDeltaEvent),
-
-    Raw(RawEvent),
-    Custom(CustomEvent),
-
-    RunStarted(RunStartedEvent),
-    RunFinished(RunFinishedEvent),
-    RunError(RunErrorEvent),
-    StepStarted(StepStartedEvent),
-    StepFinished(StepFinishedEvent),
-
-    ReasoningStart(ReasoningStartEvent),
-    ReasoningMessageStart(ReasoningMessageStartEvent),
-    ReasoningMessageContent(ReasoningMessageContentEvent),
-    ReasoningMessageEnd(ReasoningMessageEndEvent),
-    ReasoningMessageChunk(ReasoningMessageChunkEvent),
-    ReasoningEnd(ReasoningEndEvent),
-    ReasoningEncryptedValue(ReasoningEncryptedValueEvent),
-
-    // legacy: THINKING_* is upstream-deprecated but must still pass through for old streams.
-    #[allow(deprecated)]
-    #[deprecated(note = "use REASONING_* instead")]
-    ThinkingStart(ThinkingStartEvent),
-    #[allow(deprecated)]
-    #[deprecated(note = "use REASONING_* instead")]
-    ThinkingEnd(ThinkingEndEvent),
-    #[allow(deprecated)]
-    #[deprecated(note = "use REASONING_* instead")]
-    ThinkingTextMessageStart(ThinkingTextMessageStartEvent),
-    #[allow(deprecated)]
-    #[deprecated(note = "use REASONING_* instead")]
-    ThinkingTextMessageContent(ThinkingTextMessageContentEvent),
-    #[allow(deprecated)]
-    #[deprecated(note = "use REASONING_* instead")]
-    ThinkingTextMessageEnd(ThinkingTextMessageEndEvent),
-
-    SubagentStarted(SubagentStartedEvent),
-    SubagentFinished(SubagentFinishedEvent),
-    SubagentError(SubagentErrorEvent),
-}
-
 /// Generates [`Event::event_type`] and [`Event::base`] from a single variant
 /// list, keeping the two dispatch tables in lockstep as variants are added.
 macro_rules! impl_event_dispatch {
     ($($variant:ident),+ $(,)?) => {
         impl Event {
             /// Returns the [`EventType`] discriminant for this event.
-            #[allow(deprecated)]
             pub fn event_type(&self) -> EventType {
                 match self {
                     $(Self::$variant(_) => EventType::$variant,)+
@@ -589,7 +609,6 @@ macro_rules! impl_event_dispatch {
             }
 
             /// Returns the shared [`BaseEventFields`] carried by every event.
-            #[allow(deprecated)]
             pub fn base(&self) -> &BaseEventFields {
                 match self {
                     $(Self::$variant(e) => &e.base,)+
@@ -628,11 +647,6 @@ impl_event_dispatch!(
     ReasoningMessageChunk,
     ReasoningEnd,
     ReasoningEncryptedValue,
-    ThinkingStart,
-    ThinkingEnd,
-    ThinkingTextMessageStart,
-    ThinkingTextMessageContent,
-    ThinkingTextMessageEnd,
     SubagentStarted,
     SubagentFinished,
     SubagentError,
@@ -645,6 +659,7 @@ pub mod factory {
         Event::RunStarted(RunStartedEvent {
             thread_id: thread_id.into(),
             run_id: run_id.into(),
+            protocol_version: None,
             parent_run_id: None,
             input: None,
             base: BaseEventFields::default(),
@@ -656,7 +671,9 @@ pub mod factory {
             thread_id: thread_id.into(),
             run_id: run_id.into(),
             result: None,
-            outcome: Some(RunFinishedOutcome::Success),
+            outcome: Some(RunFinishedOutcome::Success {
+                pending_tool_call_ids: None,
+            }),
             usage: Vec::new(),
             base: BaseEventFields::default(),
         })
@@ -677,6 +694,7 @@ pub mod factory {
             role: TextMessageRole::Assistant,
             name: None,
             base: BaseEventFields::default(),
+            attributable: AttributableFields::default(),
         })
     }
 
@@ -685,6 +703,7 @@ pub mod factory {
             message_id: message_id.into(),
             delta: delta.into(),
             base: BaseEventFields::default(),
+            attributable: AttributableFields::default(),
         })
     }
 
@@ -692,6 +711,7 @@ pub mod factory {
         Event::TextMessageEnd(TextMessageEndEvent {
             message_id: message_id.into(),
             base: BaseEventFields::default(),
+            attributable: AttributableFields::default(),
         })
     }
 
@@ -704,6 +724,7 @@ pub mod factory {
             tool_call_name: tool_call_name.into(),
             parent_message_id: None,
             base: BaseEventFields::default(),
+            attributable: AttributableFields::default(),
         })
     }
 
@@ -712,6 +733,7 @@ pub mod factory {
             tool_call_id: tool_call_id.into(),
             delta: delta.into(),
             base: BaseEventFields::default(),
+            attributable: AttributableFields::default(),
         })
     }
 
@@ -719,6 +741,7 @@ pub mod factory {
         Event::ToolCallEnd(ToolCallEndEvent {
             tool_call_id: tool_call_id.into(),
             base: BaseEventFields::default(),
+            attributable: AttributableFields::default(),
         })
     }
 
@@ -726,6 +749,7 @@ pub mod factory {
         Event::StateSnapshot(StateSnapshotEvent {
             snapshot,
             base: BaseEventFields::default(),
+            attributable: AttributableFields::default(),
         })
     }
 
@@ -733,6 +757,7 @@ pub mod factory {
         Event::StateDelta(StateDeltaEvent {
             delta,
             base: BaseEventFields::default(),
+            attributable: AttributableFields::default(),
         })
     }
 
@@ -740,6 +765,7 @@ pub mod factory {
         Event::StepStarted(StepStartedEvent {
             step_name: step_name.into(),
             base: BaseEventFields::default(),
+            attributable: AttributableFields::default(),
         })
     }
 
@@ -747,6 +773,7 @@ pub mod factory {
         Event::StepFinished(StepFinishedEvent {
             step_name: step_name.into(),
             base: BaseEventFields::default(),
+            attributable: AttributableFields::default(),
         })
     }
 }
@@ -771,6 +798,7 @@ mod tests {
         assert_eq!(json["type"], "RUN_STARTED");
         assert_eq!(json["threadId"], "t1");
         assert_eq!(json["runId"], "r1");
+        assert!(json.get("protocolVersion").is_none());
     }
 
     #[test]
@@ -833,10 +861,35 @@ mod tests {
             content: "ok".into(),
             role: Some(ToolResultRole::Tool),
             base: BaseEventFields::default(),
+            attributable: AttributableFields::default(),
         });
         round_trip(&event);
         let json = serde_json::to_value(&event).unwrap();
         assert_eq!(json["role"], "tool");
+        assert_eq!(json["content"], "ok");
+    }
+
+    #[test]
+    fn tool_call_result_content_carries_parts() {
+        let event = Event::ToolCallResult(ToolCallResultEvent {
+            message_id: "m1".into(),
+            tool_call_id: "tc1".into(),
+            content: ToolResultContent::Parts(vec![crate::ContentPart::Text {
+                id: None,
+                text: "hello".into(),
+                metadata: None,
+            }]),
+            role: None,
+            base: BaseEventFields::default(),
+            attributable: AttributableFields::default(),
+        });
+        round_trip(&event);
+        let json = serde_json::to_value(&event).unwrap();
+        assert_eq!(
+            json["content"],
+            json!([{ "type": "text", "text": "hello" }])
+        );
+        assert!(json.get("role").is_none());
     }
 
     #[test]
@@ -856,6 +909,38 @@ mod tests {
     }
 
     #[test]
+    fn run_finished_success_outcome_carries_pending_tool_calls() {
+        let event = Event::RunFinished(RunFinishedEvent {
+            thread_id: "t1".into(),
+            run_id: "r1".into(),
+            result: None,
+            outcome: Some(RunFinishedOutcome::Success {
+                pending_tool_call_ids: Some(vec!["tc1".into(), "tc2".into()]),
+            }),
+            usage: Vec::new(),
+            base: BaseEventFields::default(),
+        });
+        round_trip(&event);
+        let json = serde_json::to_value(&event).unwrap();
+        assert_eq!(json["outcome"]["pendingToolCallIds"], json!(["tc1", "tc2"]));
+    }
+
+    #[test]
+    fn run_finished_cancelled_outcome() {
+        let event = Event::RunFinished(RunFinishedEvent {
+            thread_id: "t1".into(),
+            run_id: "r1".into(),
+            result: None,
+            outcome: Some(RunFinishedOutcome::Cancelled),
+            usage: Vec::new(),
+            base: BaseEventFields::default(),
+        });
+        round_trip(&event);
+        let json = serde_json::to_value(&event).unwrap();
+        assert_eq!(json["outcome"], json!({ "type": "cancelled" }));
+    }
+
+    #[test]
     fn run_finished_interrupt_outcome() {
         let event = Event::RunFinished(RunFinishedEvent {
             thread_id: "t1".into(),
@@ -863,6 +948,7 @@ mod tests {
             result: None,
             outcome: Some(RunFinishedOutcome::Interrupt {
                 interrupts: vec![Interrupt {
+                    subagent_run_id: Some("sub-1".into()),
                     id: "i1".into(),
                     reason: "needs_human".into(),
                     message: None,
@@ -879,6 +965,7 @@ mod tests {
         let json = serde_json::to_value(&event).unwrap();
         assert_eq!(json["outcome"]["type"], "interrupt");
         assert_eq!(json["outcome"]["interrupts"][0]["id"], "i1");
+        assert_eq!(json["outcome"]["interrupts"][0]["subagentRunId"], "sub-1");
     }
 
     #[test]
@@ -886,17 +973,20 @@ mod tests {
         round_trip(&Event::ReasoningStart(ReasoningStartEvent {
             message_id: "r1".into(),
             base: BaseEventFields::default(),
+            attributable: AttributableFields::default(),
         }));
         round_trip(&Event::ReasoningMessageStart(ReasoningMessageStartEvent {
             message_id: "r1".into(),
             role: ReasoningMessageRole::Reasoning,
             base: BaseEventFields::default(),
+            attributable: AttributableFields::default(),
         }));
         round_trip(&Event::ReasoningMessageContent(
             ReasoningMessageContentEvent {
                 message_id: "r1".into(),
                 delta: "thinking...".into(),
                 base: BaseEventFields::default(),
+                attributable: AttributableFields::default(),
             },
         ));
         round_trip(&Event::ReasoningEncryptedValue(
@@ -905,8 +995,27 @@ mod tests {
                 entity_id: "tc1".into(),
                 encrypted_value: "abc".into(),
                 base: BaseEventFields::default(),
+                attributable: AttributableFields::default(),
             },
         ));
+    }
+
+    #[test]
+    fn reasoning_message_start_requires_fixed_role() {
+        let error = serde_json::from_value::<Event>(json!({
+            "type": "REASONING_MESSAGE_START",
+            "messageId": "r1"
+        }))
+        .expect_err("role is required, not defaulted");
+        assert!(error.to_string().contains("role"));
+
+        let event: Event = serde_json::from_value(json!({
+            "type": "REASONING_MESSAGE_START",
+            "messageId": "r1",
+            "role": "reasoning"
+        }))
+        .expect("fixed role should parse");
+        assert_eq!(event.event_type(), EventType::ReasoningMessageStart);
     }
 
     #[test]
@@ -916,32 +1025,10 @@ mod tests {
             entity_id: "x".into(),
             encrypted_value: "y".into(),
             base: BaseEventFields::default(),
+            attributable: AttributableFields::default(),
         });
         let json = serde_json::to_value(&event).unwrap();
         assert_eq!(json["subtype"], "tool-call");
-    }
-
-    #[test]
-    // legacy: THINKING_* is upstream-deprecated but must still pass through for old streams.
-    #[allow(deprecated)]
-    fn deprecated_thinking_events_round_trip() {
-        round_trip(&Event::ThinkingStart(ThinkingStartEvent {
-            title: Some("planning".into()),
-            base: BaseEventFields::default(),
-        }));
-        round_trip(&Event::ThinkingEnd(ThinkingEndEvent::default()));
-        round_trip(&Event::ThinkingTextMessageStart(
-            ThinkingTextMessageStartEvent::default(),
-        ));
-        round_trip(&Event::ThinkingTextMessageContent(
-            ThinkingTextMessageContentEvent {
-                delta: "x".into(),
-                base: BaseEventFields::default(),
-            },
-        ));
-        round_trip(&Event::ThinkingTextMessageEnd(
-            ThinkingTextMessageEndEvent::default(),
-        ));
     }
 
     #[test]
@@ -952,15 +1039,31 @@ mod tests {
             message_id: "a1".into(),
             activity_type: "plan".into(),
             content,
-            replace: true,
+            replace: None,
             base: BaseEventFields::default(),
+            attributable: AttributableFields::default(),
         }));
         round_trip(&Event::ActivityDelta(ActivityDeltaEvent {
             message_id: "a1".into(),
             activity_type: "plan".into(),
             patch: vec![json!({"op": "add", "path": "/steps/0", "value": "x"})],
             base: BaseEventFields::default(),
+            attributable: AttributableFields::default(),
         }));
+    }
+
+    #[test]
+    fn activity_snapshot_omits_absent_replace() {
+        let event = Event::ActivitySnapshot(ActivitySnapshotEvent {
+            message_id: "a1".into(),
+            activity_type: "plan".into(),
+            content: serde_json::Map::new(),
+            replace: None,
+            base: BaseEventFields::default(),
+            attributable: AttributableFields::default(),
+        });
+        let json = serde_json::to_value(&event).unwrap();
+        assert!(json.get("replace").is_none());
     }
 
     #[test]
@@ -969,11 +1072,13 @@ mod tests {
             event: json!({"any": "thing"}),
             source: Some("openai".into()),
             base: BaseEventFields::default(),
+            attributable: AttributableFields::default(),
         }));
         round_trip(&Event::Custom(CustomEvent {
             name: "my-event".into(),
             value: json!({"x": 1}),
             base: BaseEventFields::default(),
+            attributable: AttributableFields::default(),
         }));
     }
 
@@ -990,6 +1095,8 @@ mod tests {
             content: UserMessageContent::Text("hi".into()),
             name: None,
             encrypted_value: None,
+            subagent_run_id: None,
+            metadata: None,
         });
         round_trip(&Event::MessagesSnapshot(MessagesSnapshotEvent {
             messages: vec![user],
@@ -1018,11 +1125,46 @@ mod tests {
                 raw_event: Some(json!({"orig": true})),
                 metadata: None,
             },
+            attributable: AttributableFields::default(),
         });
         round_trip(&event);
         let json = serde_json::to_value(&event).unwrap();
         assert_eq!(json["timestamp"], 123);
         assert_eq!(json["rawEvent"], json!({"orig": true}));
+    }
+
+    #[test]
+    fn attributable_flattens_subagent_run_id() {
+        let event = Event::TextMessageContent(TextMessageContentEvent {
+            message_id: "m1".into(),
+            delta: "hi".into(),
+            base: BaseEventFields::default(),
+            attributable: AttributableFields {
+                subagent_run_id: Some("sub-1".into()),
+            },
+        });
+        round_trip(&event);
+        let json = serde_json::to_value(&event).unwrap();
+        assert_eq!(json["subagentRunId"], "sub-1");
+    }
+
+    #[test]
+    fn run_scoped_events_cannot_carry_attribution() {
+        for json in [
+            json!({"type": "RUN_STARTED", "threadId": "t1", "runId": "r1"}),
+            json!({"type": "RUN_FINISHED", "threadId": "t1", "runId": "r1"}),
+            json!({"type": "RUN_ERROR", "message": "boom"}),
+            json!({"type": "MESSAGES_SNAPSHOT", "messages": []}),
+            json!({"type": "SUBAGENT_STARTED", "subagentRunId": "sub-1", "name": "r"}),
+        ] {
+            let event: Event = serde_json::from_value(json.clone()).expect("deserialize");
+            let back = serde_json::to_value(&event).expect("serialize");
+            assert!(
+                !back.as_object().unwrap().contains_key("subagentRunId")
+                    || back["type"] == "SUBAGENT_STARTED",
+                "{json} gained attribution"
+            );
+        }
     }
 
     #[test]
@@ -1110,7 +1252,9 @@ mod tests {
             thread_id: "t1".into(),
             run_id: "r1".into(),
             result: None,
-            outcome: Some(RunFinishedOutcome::Success),
+            outcome: Some(RunFinishedOutcome::Success {
+                pending_tool_call_ids: None,
+            }),
             usage: vec![TokenUsage {
                 provider: Some("openai".into()),
                 model: Some("gpt-5".into()),
@@ -1119,6 +1263,7 @@ mod tests {
                 total_tokens: Some(30),
                 reasoning_tokens: Some(5),
                 cached_input_tokens: Some(2),
+                cache_write_input_tokens: Some(3),
             }],
             base: BaseEventFields::default(),
         });
@@ -1132,6 +1277,7 @@ mod tests {
         assert_eq!(u["totalTokens"], 30);
         assert_eq!(u["reasoningTokens"], 5);
         assert_eq!(u["cachedInputTokens"], 2);
+        assert_eq!(u["cacheWriteInputTokens"], 3);
     }
 
     #[test]
@@ -1151,6 +1297,49 @@ mod tests {
                 assert_eq!(e.base.timestamp, Some(42));
             }
             _ => panic!("expected TextMessageContent"),
+        }
+    }
+
+    #[test]
+    fn event_type_covers_the_thirty_one_spec_events() {
+        let all = [
+            EventType::TextMessageStart,
+            EventType::TextMessageContent,
+            EventType::TextMessageEnd,
+            EventType::TextMessageChunk,
+            EventType::ToolCallStart,
+            EventType::ToolCallArgs,
+            EventType::ToolCallEnd,
+            EventType::ToolCallChunk,
+            EventType::ToolCallResult,
+            EventType::StateSnapshot,
+            EventType::StateDelta,
+            EventType::MessagesSnapshot,
+            EventType::ActivitySnapshot,
+            EventType::ActivityDelta,
+            EventType::Raw,
+            EventType::Custom,
+            EventType::RunStarted,
+            EventType::RunFinished,
+            EventType::RunError,
+            EventType::StepStarted,
+            EventType::StepFinished,
+            EventType::ReasoningStart,
+            EventType::ReasoningMessageStart,
+            EventType::ReasoningMessageContent,
+            EventType::ReasoningMessageEnd,
+            EventType::ReasoningMessageChunk,
+            EventType::ReasoningEnd,
+            EventType::ReasoningEncryptedValue,
+            EventType::SubagentStarted,
+            EventType::SubagentFinished,
+            EventType::SubagentError,
+        ];
+        assert_eq!(all.len(), 31);
+        for ty in all {
+            let json = serde_json::to_value(ty).unwrap();
+            let back: EventType = serde_json::from_value(json).unwrap();
+            assert_eq!(back, ty);
         }
     }
 }

@@ -1,8 +1,8 @@
 use agui_rs_client::{Agent, AgentConfig, AgentRunner, RunAgentParameters};
 use agui_rs_core::types::AssistantMessage;
 use agui_rs_core::{
-    factory, ActivityDeltaEvent, ActivitySnapshotEvent, BaseEventFields, Event, Message,
-    MessagesSnapshotEvent, Result, RunAgentInput, RunFinishedEvent, RunFinishedOutcome,
+    factory, ActivityDeltaEvent, ActivitySnapshotEvent, AttributableFields, BaseEventFields, Event,
+    Message, MessagesSnapshotEvent, Result, RunAgentInput, RunFinishedEvent, RunFinishedOutcome,
 };
 use async_trait::async_trait;
 use futures::{stream, stream::BoxStream};
@@ -45,6 +45,8 @@ async fn returns_run_id_thread_id_new_messages_and_new_state() {
                 messages: vec![
                     Message::Assistant(AssistantMessage {
                         id: "existing-1".into(),
+                        metadata: None,
+                        subagent_run_id: None,
                         content: Some("before".into()),
                         name: None,
                         tool_calls: None,
@@ -52,6 +54,8 @@ async fn returns_run_id_thread_id_new_messages_and_new_state() {
                     }),
                     Message::Assistant(AssistantMessage {
                         id: "new-1".into(),
+                        metadata: None,
+                        subagent_run_id: None,
                         content: Some("after".into()),
                         name: None,
                         tool_calls: None,
@@ -64,7 +68,9 @@ async fn returns_run_id_thread_id_new_messages_and_new_state() {
             run_finished(
                 "run-1",
                 Some(json!({"ignored": true})),
-                Some(RunFinishedOutcome::Success),
+                Some(RunFinishedOutcome::Success {
+                    pending_tool_call_ids: None,
+                }),
             ),
         ],
     };
@@ -74,6 +80,8 @@ async fn returns_run_id_thread_id_new_messages_and_new_state() {
             thread_id: Some("thread-1".into()),
             initial_messages: vec![Message::Assistant(AssistantMessage {
                 id: "existing-1".into(),
+                metadata: None,
+                subagent_run_id: None,
                 content: Some("before".into()),
                 name: None,
                 tool_calls: None,
@@ -97,7 +105,12 @@ async fn returns_run_id_thread_id_new_messages_and_new_state() {
     assert_eq!(result.new_messages.len(), 1);
     assert_eq!(result.new_messages[0].id(), "new-1");
     assert_eq!(result.new_state, json!({"counter": 2, "flag": true}));
-    assert_eq!(result.outcome, Some(RunFinishedOutcome::Success));
+    assert_eq!(
+        result.outcome,
+        Some(RunFinishedOutcome::Success {
+            pending_tool_call_ids: None,
+        })
+    );
 }
 
 #[tokio::test]
@@ -109,6 +122,8 @@ async fn duplicate_ids_in_messages_snapshot_do_not_create_new_messages() {
                 messages: vec![
                     Message::Assistant(AssistantMessage {
                         id: "existing-1".into(),
+                        metadata: None,
+                        subagent_run_id: None,
                         content: Some("updated".into()),
                         name: None,
                         tool_calls: None,
@@ -116,6 +131,8 @@ async fn duplicate_ids_in_messages_snapshot_do_not_create_new_messages() {
                     }),
                     Message::Assistant(AssistantMessage {
                         id: "existing-2".into(),
+                        metadata: None,
+                        subagent_run_id: None,
                         content: Some("same".into()),
                         name: None,
                         tool_calls: None,
@@ -124,7 +141,13 @@ async fn duplicate_ids_in_messages_snapshot_do_not_create_new_messages() {
                 ],
                 base: BaseEventFields::default(),
             }),
-            run_finished("run-1", None, Some(RunFinishedOutcome::Success)),
+            run_finished(
+                "run-1",
+                None,
+                Some(RunFinishedOutcome::Success {
+                    pending_tool_call_ids: None,
+                }),
+            ),
         ],
     };
     let mut runner = AgentRunner::new(
@@ -133,6 +156,8 @@ async fn duplicate_ids_in_messages_snapshot_do_not_create_new_messages() {
             initial_messages: vec![
                 Message::Assistant(AssistantMessage {
                     id: "existing-1".into(),
+                    metadata: None,
+                    subagent_run_id: None,
                     content: Some("before".into()),
                     name: None,
                     tool_calls: None,
@@ -140,6 +165,8 @@ async fn duplicate_ids_in_messages_snapshot_do_not_create_new_messages() {
                 }),
                 Message::Assistant(AssistantMessage {
                     id: "existing-2".into(),
+                    metadata: None,
+                    subagent_run_id: None,
                     content: Some("same".into()),
                     name: None,
                     tool_calls: None,
@@ -162,6 +189,8 @@ async fn duplicate_ids_in_messages_snapshot_do_not_create_new_messages() {
 async fn preserves_order_of_new_messages_from_messages_snapshot() {
     let existing = Message::Assistant(AssistantMessage {
         id: "existing".into(),
+        metadata: None,
+        subagent_run_id: None,
         content: Some("existing".into()),
         name: None,
         tool_calls: None,
@@ -175,6 +204,8 @@ async fn preserves_order_of_new_messages_from_messages_snapshot() {
                     existing.clone(),
                     Message::Assistant(AssistantMessage {
                         id: "new-1".into(),
+                        metadata: None,
+                        subagent_run_id: None,
                         content: Some("first".into()),
                         name: None,
                         tool_calls: None,
@@ -182,6 +213,8 @@ async fn preserves_order_of_new_messages_from_messages_snapshot() {
                     }),
                     Message::Assistant(AssistantMessage {
                         id: "new-2".into(),
+                        metadata: None,
+                        subagent_run_id: None,
                         content: Some("second".into()),
                         name: None,
                         tool_calls: None,
@@ -189,6 +222,8 @@ async fn preserves_order_of_new_messages_from_messages_snapshot() {
                     }),
                     Message::Assistant(AssistantMessage {
                         id: "new-3".into(),
+                        metadata: None,
+                        subagent_run_id: None,
                         content: Some("third".into()),
                         name: None,
                         tool_calls: None,
@@ -197,7 +232,13 @@ async fn preserves_order_of_new_messages_from_messages_snapshot() {
                 ],
                 base: BaseEventFields::default(),
             }),
-            run_finished("run-1", None, Some(RunFinishedOutcome::Success)),
+            run_finished(
+                "run-1",
+                None,
+                Some(RunFinishedOutcome::Success {
+                    pending_tool_call_ids: None,
+                }),
+            ),
         ],
     };
     let mut runner = AgentRunner::new(
@@ -234,7 +275,8 @@ async fn activity_messages_are_returned_as_new_messages_with_accumulated_operati
                 message_id: "activity-ops".into(),
                 activity_type: "PLAN".into(),
                 content: Map::from_iter([(String::from("operations"), json!([]))]),
-                replace: false,
+                attributable: AttributableFields::default(),
+                replace: Some(false),
                 base: BaseEventFields::default(),
             }),
             Event::ActivityDelta(ActivityDeltaEvent {
@@ -244,6 +286,7 @@ async fn activity_messages_are_returned_as_new_messages_with_accumulated_operati
                     json!({"op": "add", "path": "/operations/-", "value": first_operation}),
                 ],
                 base: BaseEventFields::default(),
+                attributable: AttributableFields::default(),
             }),
             Event::ActivityDelta(ActivityDeltaEvent {
                 message_id: "activity-ops".into(),
@@ -252,8 +295,15 @@ async fn activity_messages_are_returned_as_new_messages_with_accumulated_operati
                     json!({"op": "add", "path": "/operations/-", "value": second_operation}),
                 ],
                 base: BaseEventFields::default(),
+                attributable: AttributableFields::default(),
             }),
-            run_finished("run-ops", None, Some(RunFinishedOutcome::Success)),
+            run_finished(
+                "run-ops",
+                None,
+                Some(RunFinishedOutcome::Success {
+                    pending_tool_call_ids: None,
+                }),
+            ),
         ],
     };
     let mut runner = AgentRunner::new(agent, AgentConfig::default());
@@ -288,6 +338,7 @@ async fn activity_messages_are_returned_as_new_messages_with_accumulated_operati
 async fn interrupt_outcome_is_exposed_in_result_shape() {
     let interrupt = agui_rs_core::Interrupt {
         id: "interrupt-1".into(),
+        subagent_run_id: None,
         reason: "needs_human".into(),
         message: None,
         tool_call_id: None,

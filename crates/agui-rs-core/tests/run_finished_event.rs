@@ -1,6 +1,13 @@
 use agui_rs_core::{Event, RunFinishedOutcome};
 use serde_json::json;
 
+/// The success outcome with no pending tool calls named.
+fn success() -> RunFinishedOutcome {
+    RunFinishedOutcome::Success {
+        pending_tool_call_ids: None,
+    }
+}
+
 fn parse_run_finished(value: serde_json::Value) -> Event {
     serde_json::from_value(value).expect("deserialize run finished event")
 }
@@ -43,6 +50,34 @@ fn run_finished_parses_legacy_shape_with_result() {
 }
 
 #[test]
+fn run_finished_parses_cancelled_outcome() {
+    let event = parse_run_finished(json!({
+        "type": "RUN_FINISHED",
+        "threadId": "t-1",
+        "runId": "r-1",
+        "outcome": { "type": "cancelled" }
+    }));
+
+    assert!(
+        matches!(event, Event::RunFinished(ref event) if event.outcome == Some(RunFinishedOutcome::Cancelled))
+    );
+}
+
+#[test]
+fn run_finished_success_outcome_carries_pending_tool_call_ids() {
+    let event = parse_run_finished(json!({
+        "type": "RUN_FINISHED",
+        "threadId": "t-1",
+        "runId": "r-1",
+        "outcome": { "type": "success", "pendingToolCallIds": ["tc-1"] }
+    }));
+
+    assert!(
+        matches!(event, Event::RunFinished(ref event) if matches!(&event.outcome, Some(RunFinishedOutcome::Success { pending_tool_call_ids: Some(ids) }) if ids == &["tc-1".to_string()]))
+    );
+}
+
+#[test]
 fn run_finished_parses_success_outcome() {
     let event = parse_run_finished(json!({
         "type": "RUN_FINISHED",
@@ -53,7 +88,7 @@ fn run_finished_parses_success_outcome() {
     }));
 
     assert!(
-        matches!(event, Event::RunFinished(ref event) if event.outcome == Some(RunFinishedOutcome::Success) && event.result == Some(json!({ "answer": 42 })))
+        matches!(event, Event::RunFinished(ref event) if event.outcome == Some(success()) && event.result == Some(json!({ "answer": 42 })))
     );
 }
 
@@ -99,9 +134,7 @@ fn event_union_routes_run_finished_success_correctly() {
     }))
     .expect("deserialize success through outer union");
 
-    assert!(
-        matches!(parsed, Event::RunFinished(ref event) if event.outcome == Some(RunFinishedOutcome::Success))
-    );
+    assert!(matches!(parsed, Event::RunFinished(ref event) if event.outcome == Some(success())));
 }
 
 #[test]

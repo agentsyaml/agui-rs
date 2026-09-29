@@ -5,7 +5,8 @@
 mod middleware;
 
 use agui_rs_core::{
-    BaseEventFields, Event, RunAgentInput, RunFinishedEvent, TextMessageChunkEvent,
+    AttributableFields, BaseEventFields, Event, RunAgentInput, RunFinishedEvent,
+    TextMessageChunkEvent,
 };
 use async_stream::try_stream;
 use async_trait::async_trait;
@@ -52,6 +53,7 @@ async fn middleware_can_modify_live_events_before_agent_pipeline() {
                 Ok(Event::TextMessageChunk(TextMessageChunkEvent {
                     message_id: Some("message-1".into()),
                     role: Some(agui_rs_core::TextMessageRole::Assistant),
+                    attributable: AttributableFields::default(),
                     delta: Some("Hello".into()),
                     name: None,
                     base: BaseEventFields::default(),

@@ -3,15 +3,15 @@ use agui_rs_core::types::{
     ToolMessage, UserMessage,
 };
 use agui_rs_core::{
-    ActivityDeltaEvent, ActivitySnapshotEvent, AgUiError, Event, FunctionCall, Message,
-    ReasoningEncryptedValueSubtype, Result, State, StateDeltaEvent, TextMessageRole, ToolCall,
-    ToolCallKind, ToolCallStartEvent, UserMessageContent,
+    ActivityDeltaEvent, ActivitySnapshotEvent, AgUiError, AttributableFields, Event, FunctionCall,
+    Message, MessagesSnapshotEvent, ReasoningEncryptedValueSubtype, Result, State, StateDeltaEvent,
+    TextMessageRole, ToolCall, ToolCallKind, ToolCallStartEvent, UserMessageContent,
 };
 use async_stream::try_stream;
 use futures::{stream::BoxStream, Stream, StreamExt};
 use json_patch::{patch, Patch};
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct AppliedEvent {
@@ -53,8 +53,6 @@ where
     })
 }
 
-// legacy: THINKING_* is upstream-deprecated but must still pass through for old streams.
-#[allow(deprecated)]
 pub fn apply_event(state: &mut ApplyState, event: &Event) -> Result<()> {
     match event {
         Event::TextMessageStart(event) => {
@@ -67,6 +65,7 @@ pub fn apply_event(state: &mut ApplyState, event: &Event) -> Result<()> {
                     &event.message_id,
                     event.role,
                     event.name.clone(),
+                    event.attributable.subagent_run_id.clone(),
                 ));
             }
         }
@@ -94,6 +93,8 @@ pub fn apply_event(state: &mut ApplyState, event: &Event) -> Result<()> {
                 tool_call_id: event.tool_call_id.clone(),
                 error: None,
                 encrypted_value: None,
+                subagent_run_id: event.attributable.subagent_run_id.clone(),
+                metadata: None,
             });
 
             // Place the tool result immediately after the assistant message
@@ -130,7 +131,7 @@ pub fn apply_event(state: &mut ApplyState, event: &Event) -> Result<()> {
             }
         }
         Event::MessagesSnapshot(event) => {
-            apply_messages_snapshot(&mut state.messages, &event.messages)
+            apply_messages_snapshot(&mut state.messages, event)
         }
         Event::StateSnapshot(event) => {
             state.state = event.snapshot.clone();
@@ -149,6 +150,8 @@ pub fn apply_event(state: &mut ApplyState, event: &Event) -> Result<()> {
                     id: event.message_id.clone(),
                     content: String::new(),
                     encrypted_value: None,
+                    subagent_run_id: event.attributable.subagent_run_id.clone(),
+                    metadata: None,
                 }));
             }
         }
@@ -172,12 +175,7 @@ pub fn apply_event(state: &mut ApplyState, event: &Event) -> Result<()> {
             &event.entity_id,
             &event.encrypted_value,
         )?,
-        Event::ThinkingStart(_)
-        | Event::ThinkingEnd(_)
-        | Event::ThinkingTextMessageStart(_)
-        | Event::ThinkingTextMessageContent(_)
-        | Event::ThinkingTextMessageEnd(_)
-        | Event::TextMessageChunk(_)
+        Event::TextMessageChunk(_)
         | Event::ToolCallChunk(_)
         | Event::ReasoningMessageChunk(_)
         | Event::Raw(_)
@@ -196,19 +194,28 @@ pub fn apply_event(state: &mut ApplyState, event: &Event) -> Result<()> {
     Ok(())
 }
 
-fn new_text_message(message_id: &str, role: TextMessageRole, name: Option<String>) -> Message {
+fn new_text_message(
+    message_id: &str,
+    role: TextMessageRole,
+    name: Option<String>,
+    subagent_run_id: Option<String>,
+) -> Message {
     match role {
         TextMessageRole::Developer => Message::Developer(DeveloperMessage {
             id: message_id.to_string(),
             content: String::new(),
             name,
             encrypted_value: None,
+            subagent_run_id,
+            metadata: None,
         }),
         TextMessageRole::System => Message::System(SystemMessage {
             id: message_id.to_string(),
             content: String::new(),
             name,
             encrypted_value: None,
+            subagent_run_id,
+            metadata: None,
         }),
         TextMessageRole::Assistant => Message::Assistant(AssistantMessage {
             id: message_id.to_string(),
@@ -216,12 +223,16 @@ fn new_text_message(message_id: &str, role: TextMessageRole, name: Option<String
             name,
             tool_calls: None,
             encrypted_value: None,
+            subagent_run_id,
+            metadata: None,
         }),
         TextMessageRole::User => Message::User(UserMessage {
             id: message_id.to_string(),
             content: UserMessageContent::Text(String::new()),
             name,
             encrypted_value: None,
+            subagent_run_id,
+            metadata: None,
         }),
     }
 }
@@ -305,6 +316,7 @@ fn apply_tool_call_start(messages: &mut Vec<Message>, event: &ToolCallStartEvent
         messages,
         event.parent_message_id.as_deref(),
         &event.tool_call_id,
+        event.attributable.subagent_run_id.clone(),
     );
     let assistant = assistant_message_mut(&mut messages[index])?;
     assistant
@@ -318,12 +330,53 @@ fn apply_tool_call_start(messages: &mut Vec<Message>, event: &ToolCallStartEvent
                 arguments: String::new(),
             },
             encrypted_value: None,
+            metadata: None,
         });
 
     Ok(())
 }
 
-fn apply_messages_snapshot(messages: &mut Vec<Message>, snapshot: &[Message]) {
+/// Package-owned metadata namespace carrying the authority declaration.
+/// Mirrors `activity-history.ts:3` upstream.
+const ACTIVITY_HISTORY_METADATA: &str = "@ag-ui/client";
+
+/// The activity types this snapshot is authoritative for.
+///
+/// `Some(None)` — the producer declared `null` — owns every type. `Some(Some(..))`
+/// owns exactly the listed types, including the empty list (which grants
+/// omission-based deletion of nothing). `None` is a snapshot with no
+/// declaration, which falls back to inferring authority from whether the
+/// snapshot itself carries activity. An invalid declaration owns no types.
+///
+/// Mirrors `authoritativeActivityTypes` (`activity-history.ts:15-27`).
+fn authoritative_activity_types(event: &MessagesSnapshotEvent) -> Option<Option<Vec<String>>> {
+    let scope = event
+        .base
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get(ACTIVITY_HISTORY_METADATA))?;
+
+    let Some(scope) = scope.as_object() else {
+        return Some(Some(Vec::new()));
+    };
+    let types = scope.get("authoritativeActivityTypes")?;
+    if types.is_null() {
+        return Some(None);
+    }
+    let owned = types
+        .as_array()
+        .filter(|types| types.iter().all(Value::is_string))
+        .map(|types| {
+            types
+                .iter()
+                .map(|ty| ty.as_str().unwrap_or_default().to_string())
+                .collect()
+        });
+    Some(Some(owned.unwrap_or_default()))
+}
+
+fn apply_messages_snapshot(messages: &mut Vec<Message>, event: &MessagesSnapshotEvent) {
+    let snapshot = &event.messages;
     // `activity` messages are only sometimes client-only. They never travel
     // back to the backend, so a backend that does not track them cannot put
     // them in the snapshot, and the local copies must be preserved. But a
@@ -334,6 +387,10 @@ fn apply_messages_snapshot(messages: &mut Vec<Message>, snapshot: &[Message]) {
     // local copy undeletable. So when the snapshot carries activity, treat
     // it as the source of truth and apply the normal replace semantics.
     //
+    // A producer may narrow that claim by declaring the activity types it
+    // owns: then only those types may be deleted by omission and every other
+    // type is preserved, whatever the snapshot's contents look like.
+    //
     // `reasoning` is only sometimes client-only: most backends never include
     // reasoning in the snapshot, so dropping local reasoning would lose it.
     // But a backend that round-trips reasoning (e.g. LangGraph re-deriving
@@ -342,31 +399,49 @@ fn apply_messages_snapshot(messages: &mut Vec<Message>, snapshot: &[Message]) {
     // events and the snapshot. When the snapshot carries reasoning, treat it
     // as the source of truth and apply normal replace semantics so the same
     // reasoning isn't rendered twice.
+    let owned_activity_types = authoritative_activity_types(event);
     let snapshot_has_activity = snapshot.iter().any(|m| matches!(m, Message::Activity(_)));
     let snapshot_has_reasoning = snapshot.iter().any(|m| matches!(m, Message::Reasoning(_)));
 
-    let mut snapshot_map: HashMap<String, Message> = snapshot
+    let snapshot_map: HashMap<String, Message> = snapshot
         .iter()
         .cloned()
         .map(|message| (message.id().to_string(), message))
         .collect();
-    let mut merged = Vec::new();
 
+    let is_preserved_client_only = |message: &Message| match message {
+        Message::Activity(activity) => match &owned_activity_types {
+            Some(Some(owned)) => !owned.iter().any(|ty| ty == &activity.activity_type),
+            Some(None) => false,
+            None => !snapshot_has_activity,
+        },
+        Message::Reasoning(_) => !snapshot_has_reasoning,
+        _ => false,
+    };
+
+    // Existing message positions are preserved and a matching id always takes
+    // the snapshot's copy — authority only governs messages the snapshot
+    // omits, so an id outside a declared activity type still updates in place.
+    let mut merged: Vec<Message> = Vec::new();
     for message in messages.iter() {
-        let is_preserved_client_only = (matches!(message, Message::Activity(_))
-            && !snapshot_has_activity)
-            || (matches!(message, Message::Reasoning(_)) && !snapshot_has_reasoning);
-
-        if is_preserved_client_only {
+        if let Some(snapshot_message) = snapshot_map.get(message.id()) {
+            merged.push(snapshot_message.clone());
+        } else if is_preserved_client_only(message) {
             merged.push(message.clone());
-        } else if let Some(snapshot_message) = snapshot_map.remove(message.id()) {
-            merged.push(snapshot_message);
         }
     }
 
+    // New ids are appended in snapshot order. ponytail: upstream once owned the
+    // whole transcript order here (`fix(client): apply MESSAGES_SNAPSHOT in
+    // snapshot order`), then reverted to preserving existing positions
+    // (`f6295c50`) — HEAD is the code above, and its README says so outright.
+    let existing_ids: HashSet<String> = merged
+        .iter()
+        .map(|message| message.id().to_string())
+        .collect();
     for snapshot_message in snapshot {
-        if let Some(snapshot_message) = snapshot_map.remove(snapshot_message.id()) {
-            merged.push(snapshot_message);
+        if !existing_ids.contains(snapshot_message.id()) {
+            merged.push(snapshot_message.clone());
         }
     }
 
@@ -378,16 +453,22 @@ fn apply_activity_snapshot(messages: &mut Vec<Message>, event: &ActivitySnapshot
         id: event.message_id.clone(),
         activity_type: event.activity_type.clone(),
         content: event.content.clone(),
+        subagent_run_id: event.attributable.subagent_run_id.clone(),
+        metadata: None,
     });
+
+    // Absent `replace` means replace: the snapshot is the authoritative
+    // content for the activity it names.
+    let replace = event.replace.unwrap_or(true);
 
     if let Some(index) = messages
         .iter()
         .position(|message| message.id() == event.message_id)
     {
         match &messages[index] {
-            Message::Activity(_) if event.replace => messages[index] = activity_message,
+            Message::Activity(_) if replace => messages[index] = activity_message,
             Message::Activity(_) => {}
-            _ if event.replace => messages[index] = activity_message,
+            _ if replace => messages[index] = activity_message,
             _ => {}
         }
         return;
@@ -408,26 +489,45 @@ fn apply_activity_delta(messages: &mut [Message], event: &ActivityDeltaEvent) ->
         return Ok(());
     };
 
+    // RFC 6902 against the activity's content, same `json_patch::patch` the
+    // state reducer uses. A failed patch is announced and the prior content
+    // kept: a stale path is a producer's defect, not a reason to fail the run
+    // (`apply/default.ts:963-983`). The activity type still moves — it rides
+    // the event, not the patch result.
     let mut content = Value::Object(existing.content.clone());
-    apply_state_delta(
+    match apply_state_delta(
         &StateDeltaEvent {
             delta: event.patch.clone(),
             base: event.base.clone(),
+            attributable: AttributableFields::default(),
         },
         &mut content,
-    )?;
+    ) {
+        Ok(()) => {}
+        Err(err) => {
+            tracing::warn!(
+                message_id = %event.message_id,
+                error = %err,
+                "Failed to apply activity patch"
+            );
+            return Ok(());
+        }
+    }
 
     let Value::Object(content) = content else {
-        return Err(AgUiError::validation(format!(
-            "activity '{}' content patch must produce an object",
-            event.message_id
-        )));
+        tracing::warn!(
+            message_id = %event.message_id,
+            "Failed to apply activity patch: the patched content is not an object"
+        );
+        return Ok(());
     };
 
     messages[index] = Message::Activity(ActivityMessage {
         id: event.message_id.clone(),
         activity_type: event.activity_type.clone(),
         content,
+        subagent_run_id: existing.subagent_run_id.clone(),
+        metadata: None,
     });
 
     Ok(())
@@ -482,6 +582,7 @@ fn resolve_or_create_assistant_message(
     messages: &mut Vec<Message>,
     parent_message_id: Option<&str>,
     tool_call_id: &str,
+    subagent_run_id: Option<String>,
 ) -> usize {
     if let Some(parent_message_id) = parent_message_id {
         if let Some(index) = messages
@@ -498,6 +599,8 @@ fn resolve_or_create_assistant_message(
                 name: None,
                 tool_calls: Some(Vec::new()),
                 encrypted_value: None,
+                subagent_run_id,
+                metadata: None,
             }));
             return messages.len() - 1;
         }
@@ -508,6 +611,8 @@ fn resolve_or_create_assistant_message(
             name: None,
             tool_calls: Some(Vec::new()),
             encrypted_value: None,
+            subagent_run_id,
+            metadata: None,
         }));
         return messages.len() - 1;
     }
@@ -525,6 +630,8 @@ fn resolve_or_create_assistant_message(
         name: None,
         tool_calls: Some(Vec::new()),
         encrypted_value: None,
+        subagent_run_id,
+        metadata: None,
     }));
     messages.len() - 1
 }
@@ -610,6 +717,7 @@ mod tests {
             Event::TextMessageStart(agui_rs_core::TextMessageStartEvent {
                 message_id: "m1".into(),
                 role: TextMessageRole::Assistant,
+                attributable: AttributableFields::default(),
                 name: None,
                 base: agui_rs_core::BaseEventFields::default(),
             }),
@@ -627,11 +735,9 @@ mod tests {
 
     mod reasoning_apply {
         use super::*;
-        // legacy: THINKING_* is upstream-deprecated but must still pass through for old streams.
-        #[allow(deprecated)]
         use agui_rs_core::{
             ReasoningEncryptedValueEvent, ReasoningMessageContentEvent, ReasoningMessageEndEvent,
-            ReasoningMessageRole, ReasoningMessageStartEvent, ThinkingEndEvent, ThinkingStartEvent,
+            ReasoningMessageRole, ReasoningMessageStartEvent,
         };
 
         #[tokio::test]
@@ -640,6 +746,7 @@ mod tests {
                 ReasoningMessageStartEvent {
                     message_id: "r1".into(),
                     role: ReasoningMessageRole::Reasoning,
+                    attributable: AttributableFields::default(),
                     base: agui_rs_core::BaseEventFields::default(),
                 },
             )])
@@ -654,21 +761,25 @@ mod tests {
                 Event::ReasoningMessageStart(ReasoningMessageStartEvent {
                     message_id: "r1".into(),
                     role: ReasoningMessageRole::Reasoning,
+                    attributable: AttributableFields::default(),
                     base: agui_rs_core::BaseEventFields::default(),
                 }),
                 Event::ReasoningMessageContent(ReasoningMessageContentEvent {
                     message_id: "r1".into(),
                     delta: "pla".into(),
                     base: agui_rs_core::BaseEventFields::default(),
+                    attributable: AttributableFields::default(),
                 }),
                 Event::ReasoningMessageContent(ReasoningMessageContentEvent {
                     message_id: "r1".into(),
                     delta: "n".into(),
                     base: agui_rs_core::BaseEventFields::default(),
+                    attributable: AttributableFields::default(),
                 }),
                 Event::ReasoningMessageEnd(ReasoningMessageEndEvent {
                     message_id: "r1".into(),
                     base: agui_rs_core::BaseEventFields::default(),
+                    attributable: AttributableFields::default(),
                 }),
             ]);
 
@@ -684,12 +795,14 @@ mod tests {
                 Event::ReasoningMessageStart(ReasoningMessageStartEvent {
                     message_id: "r1".into(),
                     role: ReasoningMessageRole::Reasoning,
+                    attributable: AttributableFields::default(),
                     base: agui_rs_core::BaseEventFields::default(),
                 }),
                 Event::ReasoningEncryptedValue(ReasoningEncryptedValueEvent {
                     subtype: ReasoningEncryptedValueSubtype::Message,
                     entity_id: "r1".into(),
                     encrypted_value: "secret".into(),
+                    attributable: AttributableFields::default(),
                     base: agui_rs_core::BaseEventFields::default(),
                 }),
             ]);
@@ -700,24 +813,6 @@ mod tests {
                 }
                 _ => panic!("expected reasoning message"),
             }
-        }
-
-        #[tokio::test]
-        // legacy: THINKING_* is upstream-deprecated but must still pass through for old streams.
-        #[allow(deprecated)]
-        async fn thinking_events_are_accepted_as_noops() {
-            let state = apply_all(vec![
-                Event::ThinkingStart(ThinkingStartEvent {
-                    title: Some("legacy".into()),
-                    base: agui_rs_core::BaseEventFields::default(),
-                }),
-                Event::ThinkingEnd(ThinkingEndEvent {
-                    base: agui_rs_core::BaseEventFields::default(),
-                }),
-            ]);
-
-            assert!(state.messages.is_empty());
-            assert_eq!(state.state, Value::Null);
         }
     }
 
@@ -730,7 +825,8 @@ mod tests {
                 message_id: "a1".into(),
                 activity_type: "plan".into(),
                 content: serde_json::Map::from_iter([(String::from("step"), json!("search"))]),
-                replace: true,
+                attributable: AttributableFields::default(),
+                replace: Some(true),
                 base: agui_rs_core::BaseEventFields::default(),
             })])
             .await;
@@ -748,7 +844,8 @@ mod tests {
                     message_id: "a1".into(),
                     activity_type: "plan".into(),
                     content: serde_json::Map::from_iter([(String::from("steps"), json!([]))]),
-                    replace: true,
+                    attributable: AttributableFields::default(),
+                    replace: Some(true),
                     base: agui_rs_core::BaseEventFields::default(),
                 }),
                 Event::ActivityDelta(ActivityDeltaEvent {
@@ -756,6 +853,7 @@ mod tests {
                     activity_type: "execute".into(),
                     patch: vec![json!({"op": "add", "path": "/steps/0", "value": "search"})],
                     base: agui_rs_core::BaseEventFields::default(),
+                    attributable: AttributableFields::default(),
                 }),
             ]);
 
@@ -773,6 +871,8 @@ mod tests {
             let mut state = ApplyState {
                 messages: vec![Message::Activity(ActivityMessage {
                     id: "a1".into(),
+                    metadata: None,
+                    subagent_run_id: None,
                     activity_type: "plan".into(),
                     content: serde_json::Map::from_iter([(String::from("step"), json!("keep"))]),
                 })],
@@ -785,7 +885,8 @@ mod tests {
                     message_id: "a1".into(),
                     activity_type: "execute".into(),
                     content: serde_json::Map::from_iter([(String::from("step"), json!("drop"))]),
-                    replace: false,
+                    attributable: AttributableFields::default(),
+                    replace: Some(false),
                     base: agui_rs_core::BaseEventFields::default(),
                 }),
             )
@@ -807,9 +908,226 @@ mod tests {
                 activity_type: "plan".into(),
                 patch: vec![json!({"op": "add", "path": "/step", "value": "x"})],
                 base: agui_rs_core::BaseEventFields::default(),
+                attributable: AttributableFields::default(),
             })]);
 
             assert!(state.messages.is_empty());
+        }
+        #[tokio::test]
+        async fn activity_delta_applies_an_rfc6902_patch() {
+            let state = apply_all(vec![
+                Event::ActivitySnapshot(ActivitySnapshotEvent {
+                    message_id: "a1".into(),
+                    activity_type: "plan".into(),
+                    content: serde_json::Map::new(),
+                    replace: Some(true),
+                    base: agui_rs_core::BaseEventFields::default(),
+                    attributable: AttributableFields::default(),
+                }),
+                Event::ActivityDelta(ActivityDeltaEvent {
+                    message_id: "a1".into(),
+                    activity_type: "plan".into(),
+                    patch: vec![json!({"op": "add", "path": "/step", "value": "one"})],
+                    base: agui_rs_core::BaseEventFields::default(),
+                    attributable: AttributableFields::default(),
+                }),
+            ]);
+
+            match &state.messages[0] {
+                Message::Activity(message) => {
+                    assert_eq!(message.content.get("step"), Some(&json!("one")));
+                }
+                other => panic!("expected activity message, got {other:?}"),
+            }
+        }
+
+        #[tokio::test]
+        async fn activity_delta_reports_a_stale_patch_without_failing_the_run() {
+            let state = apply_all(vec![
+                Event::ActivitySnapshot(ActivitySnapshotEvent {
+                    message_id: "a1".into(),
+                    activity_type: "plan".into(),
+                    content: serde_json::Map::new(),
+                    replace: Some(true),
+                    base: agui_rs_core::BaseEventFields::default(),
+                    attributable: AttributableFields::default(),
+                }),
+                Event::ActivityDelta(ActivityDeltaEvent {
+                    message_id: "a1".into(),
+                    activity_type: "plan".into(),
+                    patch: vec![json!({"op": "replace", "path": "/nope", "value": "x"})],
+                    base: agui_rs_core::BaseEventFields::default(),
+                    attributable: AttributableFields::default(),
+                }),
+            ]);
+
+            // The prior content stands; a producer's stale path is not a reason
+            // to fail the run.
+            match &state.messages[0] {
+                Message::Activity(message) => {
+                    assert!(message.content.is_empty(), "got {:?}", message.content);
+                }
+                other => panic!("expected activity message, got {other:?}"),
+            }
+        }
+
+        /// A producer may declare the activity types it owns. Omitted activity
+        /// of an undeclared type is then preserved, while a declared type the
+        /// snapshot leaves out is deleted.
+        #[test]
+        fn messages_snapshot_honours_declared_activity_authority() {
+            let activity = |id: &str, activity_type: &str| {
+                Message::Activity(ActivityMessage {
+                    id: id.into(),
+                    activity_type: activity_type.into(),
+                    content: serde_json::Map::new(),
+                    subagent_run_id: None,
+                    metadata: None,
+                })
+            };
+            let owned = |types: Value| {
+                Event::MessagesSnapshot(MessagesSnapshotEvent {
+                    messages: vec![activity("a1", "plan")],
+                    base: agui_rs_core::BaseEventFields {
+                        metadata: Some(json!({
+                            "@ag-ui/client": {"authoritativeActivityTypes": types}
+                        })),
+                        ..Default::default()
+                    },
+                })
+            };
+            fn ids(state: &ApplyState) -> Vec<String> {
+                state.messages.iter().map(|m| m.id().to_string()).collect()
+            }
+
+            // `a1` matches by id, so it updates in place; `a2` is omitted and of
+            // an UNDECLARED type, so it is preserved.
+            let mut state = ApplyState {
+                messages: vec![activity("a1", "plan"), activity("a2", "chat")],
+                state: Value::Null,
+            };
+            apply_event(&mut state, &owned(json!(["plan"]))).unwrap();
+            assert_eq!(
+                ids(&state),
+                vec!["a1", "a2"],
+                "the undeclared type is preserved"
+            );
+
+            // A DECLARED type the snapshot omits is deleted.
+            let mut state = ApplyState {
+                messages: vec![activity("a1", "plan"), activity("a2", "chat")],
+                state: Value::Null,
+            };
+            apply_event(
+                &mut state,
+                &Event::MessagesSnapshot(MessagesSnapshotEvent {
+                    messages: vec![],
+                    base: agui_rs_core::BaseEventFields {
+                        metadata: Some(json!({
+                            "@ag-ui/client": {"authoritativeActivityTypes": ["plan"]}
+                        })),
+                        ..Default::default()
+                    },
+                }),
+            )
+            .unwrap();
+            assert_eq!(ids(&state), vec!["a2"], "the declared type is deletable");
+
+            // An empty declaration owns nothing, so omission deletes nothing.
+            let mut state = ApplyState {
+                messages: vec![activity("a1", "plan"), activity("a2", "chat")],
+                state: Value::Null,
+            };
+            apply_event(
+                &mut state,
+                &Event::MessagesSnapshot(MessagesSnapshotEvent {
+                    messages: vec![],
+                    base: agui_rs_core::BaseEventFields {
+                        metadata: Some(
+                            json!({"@ag-ui/client": {"authoritativeActivityTypes": []}}),
+                        ),
+                        ..Default::default()
+                    },
+                }),
+            )
+            .unwrap();
+            assert_eq!(ids(&state), vec!["a1", "a2"]);
+
+            // `null` means every type, so the transcript-only snapshot deletes
+            // the activity it leaves out.
+            let mut state = ApplyState {
+                messages: vec![activity("a1", "plan"), activity("a2", "chat")],
+                state: Value::Null,
+            };
+            apply_event(
+                &mut state,
+                &Event::MessagesSnapshot(MessagesSnapshotEvent {
+                    messages: vec![],
+                    base: agui_rs_core::BaseEventFields {
+                        metadata: Some(
+                            json!({"@ag-ui/client": {"authoritativeActivityTypes": null}}),
+                        ),
+                        ..Default::default()
+                    },
+                }),
+            )
+            .unwrap();
+            assert!(ids(&state).is_empty());
+
+            // No declaration at all falls back to inferring from the contents.
+            let mut state = ApplyState {
+                messages: vec![activity("a1", "plan")],
+                state: Value::Null,
+            };
+            apply_event(
+                &mut state,
+                &Event::MessagesSnapshot(MessagesSnapshotEvent {
+                    messages: vec![],
+                    base: agui_rs_core::BaseEventFields::default(),
+                }),
+            )
+            .unwrap();
+            assert_eq!(
+                ids(&state),
+                vec!["a1"],
+                "an undeclared, activity-free snapshot preserves"
+            );
+        }
+
+        /// Existing positions are preserved; ids the client has not seen are
+        /// appended in snapshot order.
+        #[test]
+        fn messages_snapshot_updates_in_place_and_appends_new_ids() {
+            let assistant = |id: &str, content: &str| {
+                Message::Assistant(AssistantMessage {
+                    id: id.into(),
+                    metadata: None,
+                    subagent_run_id: None,
+                    content: Some(content.into()),
+                    name: None,
+                    tool_calls: None,
+                    encrypted_value: None,
+                })
+            };
+
+            let mut state = ApplyState {
+                messages: vec![assistant("m1", "one"), assistant("m2", "two")],
+                state: Value::Null,
+            };
+            apply_event(
+                &mut state,
+                &Event::MessagesSnapshot(MessagesSnapshotEvent {
+                    messages: vec![assistant("m1", "one!"), assistant("m3", "three")],
+                    base: agui_rs_core::BaseEventFields::default(),
+                }),
+            )
+            .unwrap();
+
+            // `m2` is a transcript message the snapshot omits, so it is gone;
+            // `m3` is new and lands after the survivors, in snapshot order.
+            let ids: Vec<String> = state.messages.iter().map(|m| m.id().to_string()).collect();
+            assert_eq!(ids, vec!["m1", "m3"]);
+            assert_eq!(state.messages[0], assistant("m1", "one!"));
         }
     }
 
@@ -824,6 +1142,7 @@ mod tests {
                 tool_call_name: "search".into(),
                 parent_message_id: None,
                 base: agui_rs_core::BaseEventFields::default(),
+                attributable: AttributableFields::default(),
             })]);
 
             match &state.messages[0] {
@@ -843,6 +1162,7 @@ mod tests {
                     tool_call_name: "search".into(),
                     parent_message_id: Some("m1".into()),
                     base: agui_rs_core::BaseEventFields::default(),
+                    attributable: AttributableFields::default(),
                 }),
                 agui_rs_core::factory::tool_call_args("tc1", "{\"q\":\"ru"),
                 agui_rs_core::factory::tool_call_args("tc1", "st\"}"),
@@ -866,11 +1186,13 @@ mod tests {
                     tool_call_name: "search".into(),
                     parent_message_id: None,
                     base: agui_rs_core::BaseEventFields::default(),
+                    attributable: AttributableFields::default(),
                 }),
                 Event::ReasoningEncryptedValue(ReasoningEncryptedValueEvent {
                     subtype: ReasoningEncryptedValueSubtype::ToolCall,
                     entity_id: "tc1".into(),
                     encrypted_value: "cipher".into(),
+                    attributable: AttributableFields::default(),
                     base: agui_rs_core::BaseEventFields::default(),
                 }),
             ]);
@@ -890,6 +1212,7 @@ mod tests {
                 message_id: "tool-msg-1".into(),
                 tool_call_id: "tc1".into(),
                 content: "done".into(),
+                attributable: AttributableFields::default(),
                 role: Some(ToolResultRole::Tool),
                 base: agui_rs_core::BaseEventFields::default(),
             })])
@@ -912,11 +1235,13 @@ mod tests {
                     tool_call_name: "get_weather".into(),
                     parent_message_id: None,
                     base: agui_rs_core::BaseEventFields::default(),
+                    attributable: AttributableFields::default(),
                 }),
                 agui_rs_core::factory::tool_call_end("tool1"),
                 Event::TextMessageStart(agui_rs_core::TextMessageStartEvent {
                     message_id: "text1".into(),
                     role: TextMessageRole::Assistant,
+                    attributable: AttributableFields::default(),
                     name: None,
                     base: agui_rs_core::BaseEventFields::default(),
                 }),
@@ -926,6 +1251,7 @@ mod tests {
                     message_id: "res1".into(),
                     tool_call_id: "tool1".into(),
                     content: "sunny".into(),
+                    attributable: AttributableFields::default(),
                     role: Some(ToolResultRole::Tool),
                     base: agui_rs_core::BaseEventFields::default(),
                 }),
@@ -959,6 +1285,7 @@ mod tests {
                 tool_call_name: tool_call_name.into(),
                 parent_message_id: parent_message_id.map(Into::into),
                 base: agui_rs_core::BaseEventFields::default(),
+                attributable: AttributableFields::default(),
             })
         }
 
@@ -968,10 +1295,13 @@ mod tests {
         fn carried_over_assistant() -> Message {
             Message::Assistant(AssistantMessage {
                 id: "msg-1".into(),
+                metadata: None,
+                subagent_run_id: None,
                 content: None,
                 name: None,
                 tool_calls: Some(vec![ToolCall {
                     id: "tc-1".into(),
+                    metadata: None,
                     kind: ToolCallKind::Function,
                     function: FunctionCall {
                         name: "openPolicyException".into(),
@@ -1025,6 +1355,7 @@ mod tests {
                     message_id: "tm-1".into(),
                     tool_call_id: "tc-1".into(),
                     content: "approved".into(),
+                    attributable: AttributableFields::default(),
                     role: Some(ToolResultRole::Tool),
                     base: agui_rs_core::BaseEventFields::default(),
                 }),
@@ -1064,6 +1395,7 @@ mod tests {
                     message_id: "tm-1".into(),
                     tool_call_id: "tc-1".into(),
                     content: "approved".into(),
+                    attributable: AttributableFields::default(),
                     role: Some(ToolResultRole::Tool),
                     base: agui_rs_core::BaseEventFields::default(),
                 }),
@@ -1114,6 +1446,7 @@ mod tests {
             let items = collect(vec![Event::StateSnapshot(StateSnapshotEvent {
                 snapshot: json!({"count": 1}),
                 base: agui_rs_core::BaseEventFields::default(),
+                attributable: AttributableFields::default(),
             })])
             .await;
 
@@ -1126,6 +1459,7 @@ mod tests {
                 Event::StateSnapshot(StateSnapshotEvent {
                     snapshot: json!({"count": 1}),
                     base: agui_rs_core::BaseEventFields::default(),
+                    attributable: AttributableFields::default(),
                 }),
                 agui_rs_core::factory::state_delta(vec![
                     json!({"op": "replace", "path": "/count", "value": 2}),
@@ -1141,11 +1475,15 @@ mod tests {
                 messages: vec![
                     Message::Reasoning(ReasoningMessage {
                         id: "r1".into(),
+                        metadata: None,
+                        subagent_run_id: None,
                         content: "plan".into(),
                         encrypted_value: None,
                     }),
                     Message::Assistant(AssistantMessage {
                         id: "m1".into(),
+                        metadata: None,
+                        subagent_run_id: None,
                         content: Some("old".into()),
                         name: None,
                         tool_calls: None,
@@ -1160,6 +1498,8 @@ mod tests {
                 &Event::MessagesSnapshot(MessagesSnapshotEvent {
                     messages: vec![Message::Assistant(AssistantMessage {
                         id: "m1".into(),
+                        metadata: None,
+                        subagent_run_id: None,
                         content: Some("new".into()),
                         name: None,
                         tool_calls: None,
@@ -1183,17 +1523,23 @@ mod tests {
                 messages: vec![
                     Message::User(UserMessage {
                         id: "m1".into(),
+                        metadata: None,
+                        subagent_run_id: None,
                         content: UserMessageContent::Text("What is the best car to buy?".into()),
                         name: None,
                         encrypted_value: None,
                     }),
                     Message::Reasoning(ReasoningMessage {
                         id: "uuid-a".into(),
+                        metadata: None,
+                        subagent_run_id: None,
                         content: "The user wants a car recommendation.".into(),
                         encrypted_value: None,
                     }),
                     Message::Assistant(AssistantMessage {
                         id: "lc-1".into(),
+                        metadata: None,
+                        subagent_run_id: None,
                         content: Some("Based on my analysis.".into()),
                         name: None,
                         tool_calls: None,
@@ -1209,6 +1555,8 @@ mod tests {
                     messages: vec![
                         Message::User(UserMessage {
                             id: "m1".into(),
+                            metadata: None,
+                            subagent_run_id: None,
                             content: UserMessageContent::Text(
                                 "What is the best car to buy?".into(),
                             ),
@@ -1217,11 +1565,15 @@ mod tests {
                         }),
                         Message::Reasoning(ReasoningMessage {
                             id: "rs-1".into(),
+                            metadata: None,
+                            subagent_run_id: None,
                             content: "The user wants a car recommendation.".into(),
                             encrypted_value: None,
                         }),
                         Message::Assistant(AssistantMessage {
                             id: "resp-1".into(),
+                            metadata: None,
+                            subagent_run_id: None,
                             content: Some("Based on my analysis.".into()),
                             name: None,
                             tool_calls: None,
@@ -1249,12 +1601,16 @@ mod tests {
                 messages: vec![
                     Message::User(UserMessage {
                         id: "m1".into(),
+                        metadata: None,
+                        subagent_run_id: None,
                         content: UserMessageContent::Text("hello".into()),
                         name: None,
                         encrypted_value: None,
                     }),
                     Message::Activity(ActivityMessage {
                         id: "act-1".into(),
+                        metadata: None,
+                        subagent_run_id: None,
                         activity_type: "PLAN".into(),
                         content: serde_json::Map::from_iter([(
                             String::from("tasks"),
@@ -1263,11 +1619,15 @@ mod tests {
                     }),
                     Message::Reasoning(ReasoningMessage {
                         id: "uuid-a".into(),
+                        metadata: None,
+                        subagent_run_id: None,
                         content: "thinking".into(),
                         encrypted_value: None,
                     }),
                     Message::Assistant(AssistantMessage {
                         id: "lc-1".into(),
+                        metadata: None,
+                        subagent_run_id: None,
                         content: Some("hi".into()),
                         name: None,
                         tool_calls: None,
@@ -1283,17 +1643,23 @@ mod tests {
                     messages: vec![
                         Message::User(UserMessage {
                             id: "m1".into(),
+                            metadata: None,
+                            subagent_run_id: None,
                             content: UserMessageContent::Text("hello".into()),
                             name: None,
                             encrypted_value: None,
                         }),
                         Message::Reasoning(ReasoningMessage {
                             id: "rs-1".into(),
+                            metadata: None,
+                            subagent_run_id: None,
                             content: "thinking".into(),
                             encrypted_value: None,
                         }),
                         Message::Assistant(AssistantMessage {
                             id: "resp-1".into(),
+                            metadata: None,
+                            subagent_run_id: None,
                             content: Some("hi".into()),
                             name: None,
                             tool_calls: None,
@@ -1324,6 +1690,8 @@ mod tests {
         fn activity(id: &str, tasks: &[&str]) -> Message {
             Message::Activity(ActivityMessage {
                 id: id.into(),
+                metadata: None,
+                subagent_run_id: None,
                 activity_type: "PLAN".into(),
                 content: serde_json::Map::from_iter([(String::from("tasks"), json!(tasks))]),
             })
@@ -1342,6 +1710,8 @@ mod tests {
                 messages: vec![
                     Message::User(UserMessage {
                         id: "m1".into(),
+                        metadata: None,
+                        subagent_run_id: None,
                         content: UserMessageContent::Text("hello".into()),
                         name: None,
                         encrypted_value: None,
@@ -1349,6 +1719,8 @@ mod tests {
                     activity("act-1", &["stale"]),
                     Message::Assistant(AssistantMessage {
                         id: "a1".into(),
+                        metadata: None,
+                        subagent_run_id: None,
                         content: Some("hi".into()),
                         name: None,
                         tool_calls: None,
@@ -1363,6 +1735,8 @@ mod tests {
                 &snapshot(vec![
                     Message::User(UserMessage {
                         id: "m1".into(),
+                        metadata: None,
+                        subagent_run_id: None,
                         content: UserMessageContent::Text("hello".into()),
                         name: None,
                         encrypted_value: None,
@@ -1370,6 +1744,8 @@ mod tests {
                     activity("act-1", &["fresh"]),
                     Message::Assistant(AssistantMessage {
                         id: "a1".into(),
+                        metadata: None,
+                        subagent_run_id: None,
                         content: Some("hi".into()),
                         name: None,
                         tool_calls: None,
@@ -1398,6 +1774,8 @@ mod tests {
             let mut state = ApplyState {
                 messages: vec![Message::User(UserMessage {
                     id: "m1".into(),
+                    metadata: None,
+                    subagent_run_id: None,
                     content: UserMessageContent::Text("hello".into()),
                     name: None,
                     encrypted_value: None,
@@ -1410,6 +1788,8 @@ mod tests {
                 &snapshot(vec![
                     Message::User(UserMessage {
                         id: "m1".into(),
+                        metadata: None,
+                        subagent_run_id: None,
                         content: UserMessageContent::Text("hello".into()),
                         name: None,
                         encrypted_value: None,
@@ -1436,6 +1816,8 @@ mod tests {
                 messages: vec![
                     Message::User(UserMessage {
                         id: "m1".into(),
+                        metadata: None,
+                        subagent_run_id: None,
                         content: UserMessageContent::Text("hello".into()),
                         name: None,
                         encrypted_value: None,
@@ -1451,6 +1833,8 @@ mod tests {
                 &snapshot(vec![
                     Message::User(UserMessage {
                         id: "m1".into(),
+                        metadata: None,
+                        subagent_run_id: None,
                         content: UserMessageContent::Text("hello".into()),
                         name: None,
                         encrypted_value: None,
@@ -1474,6 +1858,8 @@ mod tests {
                 messages: vec![
                     Message::User(UserMessage {
                         id: "m1".into(),
+                        metadata: None,
+                        subagent_run_id: None,
                         content: UserMessageContent::Text("hello".into()),
                         name: None,
                         encrypted_value: None,
@@ -1481,6 +1867,8 @@ mod tests {
                     activity("act-1", &["local"]),
                     Message::Assistant(AssistantMessage {
                         id: "a1".into(),
+                        metadata: None,
+                        subagent_run_id: None,
                         content: Some("hi".into()),
                         name: None,
                         tool_calls: None,
@@ -1495,12 +1883,16 @@ mod tests {
                 &snapshot(vec![
                     Message::User(UserMessage {
                         id: "m1".into(),
+                        metadata: None,
+                        subagent_run_id: None,
                         content: UserMessageContent::Text("hello".into()),
                         name: None,
                         encrypted_value: None,
                     }),
                     Message::Assistant(AssistantMessage {
                         id: "a1".into(),
+                        metadata: None,
+                        subagent_run_id: None,
                         content: Some("hi".into()),
                         name: None,
                         tool_calls: None,
@@ -1524,17 +1916,23 @@ mod tests {
                 messages: vec![
                     Message::User(UserMessage {
                         id: "m1".into(),
+                        metadata: None,
+                        subagent_run_id: None,
                         content: UserMessageContent::Text("hello".into()),
                         name: None,
                         encrypted_value: None,
                     }),
                     Message::Reasoning(ReasoningMessage {
                         id: "r1".into(),
+                        metadata: None,
+                        subagent_run_id: None,
                         content: "thinking".into(),
                         encrypted_value: None,
                     }),
                     Message::Assistant(AssistantMessage {
                         id: "a1".into(),
+                        metadata: None,
+                        subagent_run_id: None,
                         content: Some("hi".into()),
                         name: None,
                         tool_calls: None,
@@ -1550,17 +1948,23 @@ mod tests {
                     messages: vec![
                         Message::User(UserMessage {
                             id: "m1".into(),
+                            metadata: None,
+                            subagent_run_id: None,
                             content: UserMessageContent::Text("hello".into()),
                             name: None,
                             encrypted_value: None,
                         }),
                         Message::Reasoning(ReasoningMessage {
                             id: "r1".into(),
+                            metadata: None,
+                            subagent_run_id: None,
                             content: "thinking".into(),
                             encrypted_value: Some("enc-1".into()),
                         }),
                         Message::Assistant(AssistantMessage {
                             id: "a1".into(),
+                            metadata: None,
+                            subagent_run_id: None,
                             content: Some("hi".into()),
                             name: None,
                             tool_calls: None,
@@ -1592,17 +1996,23 @@ mod tests {
                 messages: vec![
                     Message::User(UserMessage {
                         id: "u1".into(),
+                        metadata: None,
+                        subagent_run_id: None,
                         content: UserMessageContent::Text("q1".into()),
                         name: None,
                         encrypted_value: None,
                     }),
                     Message::Reasoning(ReasoningMessage {
                         id: "rs-1".into(),
+                        metadata: None,
+                        subagent_run_id: None,
                         content: "thinking about q1".into(),
                         encrypted_value: None,
                     }),
                     Message::Assistant(AssistantMessage {
                         id: "resp-1".into(),
+                        metadata: None,
+                        subagent_run_id: None,
                         content: Some("a1".into()),
                         name: None,
                         tool_calls: None,
@@ -1610,17 +2020,23 @@ mod tests {
                     }),
                     Message::User(UserMessage {
                         id: "u2".into(),
+                        metadata: None,
+                        subagent_run_id: None,
                         content: UserMessageContent::Text("q2".into()),
                         name: None,
                         encrypted_value: None,
                     }),
                     Message::Reasoning(ReasoningMessage {
                         id: "uuid-b".into(),
+                        metadata: None,
+                        subagent_run_id: None,
                         content: "thinking about q2".into(),
                         encrypted_value: None,
                     }),
                     Message::Assistant(AssistantMessage {
                         id: "lc-2".into(),
+                        metadata: None,
+                        subagent_run_id: None,
                         content: Some("a2".into()),
                         name: None,
                         tool_calls: None,
@@ -1636,17 +2052,23 @@ mod tests {
                     messages: vec![
                         Message::User(UserMessage {
                             id: "u1".into(),
+                            metadata: None,
+                            subagent_run_id: None,
                             content: UserMessageContent::Text("q1".into()),
                             name: None,
                             encrypted_value: None,
                         }),
                         Message::Reasoning(ReasoningMessage {
                             id: "rs-1".into(),
+                            metadata: None,
+                            subagent_run_id: None,
                             content: "thinking about q1".into(),
                             encrypted_value: None,
                         }),
                         Message::Assistant(AssistantMessage {
                             id: "resp-1".into(),
+                            metadata: None,
+                            subagent_run_id: None,
                             content: Some("a1".into()),
                             name: None,
                             tool_calls: None,
@@ -1654,17 +2076,23 @@ mod tests {
                         }),
                         Message::User(UserMessage {
                             id: "u2".into(),
+                            metadata: None,
+                            subagent_run_id: None,
                             content: UserMessageContent::Text("q2".into()),
                             name: None,
                             encrypted_value: None,
                         }),
                         Message::Reasoning(ReasoningMessage {
                             id: "rs-2".into(),
+                            metadata: None,
+                            subagent_run_id: None,
                             content: "thinking about q2".into(),
                             encrypted_value: None,
                         }),
                         Message::Assistant(AssistantMessage {
                             id: "resp-2".into(),
+                            metadata: None,
+                            subagent_run_id: None,
                             content: Some("a2".into()),
                             name: None,
                             tool_calls: None,
@@ -1695,6 +2123,7 @@ mod tests {
                 &Event::TextMessageStart(agui_rs_core::TextMessageStartEvent {
                     message_id: "m1".into(),
                     role: TextMessageRole::Assistant,
+                    attributable: AttributableFields::default(),
                     name: None,
                     base: agui_rs_core::BaseEventFields::default(),
                 }),
@@ -1710,6 +2139,7 @@ mod tests {
                 &Event::StateSnapshot(StateSnapshotEvent {
                     snapshot: json!({"status": "ok"}),
                     base: agui_rs_core::BaseEventFields::default(),
+                    attributable: AttributableFields::default(),
                 }),
             )
             .expect("snapshot applies");

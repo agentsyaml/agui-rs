@@ -166,3 +166,64 @@ async fn handles_data_prefix_split_from_json_content() {
             if event.message_id == "1" && event.delta == "Split JSON Test"
     ));
 }
+
+// -- enforcement (upstream enforce/enforce.ts) --------------------------------
+
+#[tokio::test]
+async fn enforcement_drops_an_event_type_the_protocol_does_not_describe() {
+    let events = parse_sse_stream(stream::iter(vec![
+        byte_chunk("data: {\"type\":\"MADE_UP_EVENT\",\"x\":1}\n\n"),
+        byte_chunk("data: {\"type\":\"RUN_STARTED\",\"threadId\":\"t1\",\"runId\":\"r1\"}\n\n"),
+    ]))
+    .collect::<Vec<_>>()
+    .await;
+
+    // Dropped with a warning, not an error: nothing downstream ever sees it.
+    assert_eq!(events.len(), 1);
+    assert!(matches!(events[0], Ok(Event::RunStarted(_))));
+}
+
+#[tokio::test]
+async fn enforcement_strips_a_property_a_known_event_does_not_name() {
+    let events = parse_sse_stream(stream::iter(vec![byte_chunk(
+        "data: {\"type\":\"TEXT_MESSAGE_CONTENT\",\"messageId\":\"1\",\"delta\":\"hi\",\"bogus\":true}\n\n",
+    )]))
+    .next()
+    .await
+    .expect("event should be emitted")
+    .expect("event should parse");
+
+    assert!(matches!(
+        events,
+        Event::TextMessageContent(ref event) if event.message_id == "1" && event.delta == "hi"
+    ));
+}
+
+#[tokio::test]
+async fn enforcement_keeps_a_malformed_known_value_fatal() {
+    // `messageId` is described; a number there is a malformed VALUE, which the
+    // generated validator rejects rather than strips.
+    let events = parse_sse_stream(stream::iter(vec![byte_chunk(
+        "data: {\"type\":\"TEXT_MESSAGE_CONTENT\",\"messageId\":7,\"delta\":\"hi\"}\n\n",
+    )]))
+    .next()
+    .await
+    .expect("event should be emitted");
+
+    assert!(matches!(events, Err(AgUiError::Json(_))), "got {events:?}");
+}
+
+#[tokio::test]
+async fn enforcement_runs_after_the_compatibility_boundary() {
+    // THINKING_* has no 1.0 variant: dropped untranslated it would be an
+    // unrecognised event, and the boundary translates it first.
+    let events = parse_sse_stream(stream::iter(vec![byte_chunk(
+        "data: {\"type\":\"THINKING_START\",\"title\":\"plan\"}\n\n",
+    )]))
+    .next()
+    .await
+    .expect("event should be emitted")
+    .expect("event should parse");
+
+    assert!(matches!(events, Event::ReasoningStart(_)));
+}

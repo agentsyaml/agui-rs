@@ -124,7 +124,12 @@ mod tests {
             Ok(Event::RunFinished(event)) => {
                 assert_eq!(event.thread_id, "thread-1");
                 assert_eq!(event.run_id, "run-1");
-                assert_eq!(event.outcome, Some(RunFinishedOutcome::Success));
+                assert_eq!(
+                    event.outcome,
+                    Some(RunFinishedOutcome::Success {
+                        pending_tool_call_ids: None
+                    })
+                );
             }
             other => panic!("unexpected event: {other:?}"),
         }

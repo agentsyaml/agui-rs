@@ -1,7 +1,7 @@
 //! Core types, events, and errors for the AG-UI protocol.
 //!
 //! This crate is transport-agnostic and provides:
-//! - Strongly-typed [`Event`] enum mirroring the AG-UI event surface (33 active variants).
+//! - Strongly-typed [`Event`] enum mirroring the AG-UI event surface (31 variants).
 //! - Domain types ([`Message`], [`Tool`], [`RunAgentInput`], etc.).
 //! - A unified [`AgUiError`] / [`Result`] alias.
 
@@ -24,23 +24,20 @@ pub use capabilities::{
     TransportCapabilities,
 };
 pub use error::{AgUiError, Result};
-// legacy: THINKING_* is upstream-deprecated but still re-exported for old streams.
-#[allow(deprecated)]
 pub use events::{
-    factory, ActivityDeltaEvent, ActivitySnapshotEvent, BaseEventFields, CustomEvent, Event,
-    EventType, MessagesSnapshotEvent, RawEvent, ReasoningEncryptedValueEvent,
+    factory, ActivityDeltaEvent, ActivitySnapshotEvent, AttributableFields, BaseEventFields,
+    CustomEvent, Event, EventType, MessagesSnapshotEvent, RawEvent, ReasoningEncryptedValueEvent,
     ReasoningEncryptedValueSubtype, ReasoningEndEvent, ReasoningMessageChunkEvent,
     ReasoningMessageContentEvent, ReasoningMessageEndEvent, ReasoningMessageRole,
     ReasoningMessageStartEvent, ReasoningStartEvent, RunErrorEvent, RunFinishedEvent,
     RunFinishedOutcome, RunStartedEvent, StateDeltaEvent, StateSnapshotEvent, StepFinishedEvent,
     StepStartedEvent, SubagentErrorEvent, SubagentFinishedEvent, SubagentFinishedOutcome,
     SubagentStartedEvent, TextMessageChunkEvent, TextMessageContentEvent, TextMessageEndEvent,
-    TextMessageStartEvent, ThinkingEndEvent, ThinkingStartEvent, ThinkingTextMessageContentEvent,
-    ThinkingTextMessageEndEvent, ThinkingTextMessageStartEvent, TokenUsage, ToolCallArgsEvent,
-    ToolCallChunkEvent, ToolCallEndEvent, ToolCallResultEvent, ToolCallStartEvent, ToolResultRole,
+    TextMessageStartEvent, TokenUsage, ToolCallArgsEvent, ToolCallChunkEvent, ToolCallEndEvent,
+    ToolCallResultEvent, ToolCallStartEvent, ToolResultRole,
 };
 pub use types::{
-    BinaryInputContent, Context, FunctionCall, InputContent, InputContentSource, Interrupt,
-    Message, ResumeEntry, ResumeStatus, Role, RunAgentInput, State, TextMessageRole, Tool,
-    ToolCall, ToolCallKind, UserMessageContent,
+    BinaryInputContent, ContentPart, Context, FunctionCall, Interrupt, Message, PartSource,
+    ResumeEntry, ResumeStatus, Role, RunAgentInput, State, TextMessageRole, Tool, ToolCall,
+    ToolCallKind, ToolResultContent, UserMessageContent,
 };

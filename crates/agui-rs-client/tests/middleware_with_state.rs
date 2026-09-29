@@ -11,8 +11,8 @@ mod middleware;
 mod verify;
 
 use agui_rs_core::{
-    BaseEventFields, Event, RunAgentInput, RunFinishedEvent, RunFinishedOutcome,
-    TextMessageChunkEvent, TextMessageRole,
+    AttributableFields, BaseEventFields, Event, RunAgentInput, RunFinishedEvent,
+    RunFinishedOutcome, TextMessageChunkEvent, TextMessageRole,
 };
 use async_trait::async_trait;
 use futures::{stream, StreamExt};
@@ -39,7 +39,11 @@ impl middleware::Middleware for StateTrackingMiddleware {
         next: middleware::NextFn,
     ) -> std::result::Result<middleware::EventStream, agui_rs_core::AgUiError> {
         let initial_messages = input.run_agent_input.messages.clone();
-        let initial_state = input.run_agent_input.state.clone();
+        let initial_state = input
+            .run_agent_input
+            .state
+            .clone()
+            .unwrap_or(serde_json::Value::Null);
         let applied = apply::default_apply_events(
             verify::verify_events(chunks::expand_chunks(next(input).await?)),
             initial_messages,
@@ -84,6 +88,7 @@ async fn captures_state_after_each_expanded_event() {
                 Ok(Event::TextMessageChunk(TextMessageChunkEvent {
                     message_id: Some("message-1".into()),
                     role: Some(TextMessageRole::Assistant),
+                    attributable: AttributableFields::default(),
                     delta: Some("Hello".into()),
                     name: None,
                     base: BaseEventFields::default(),
@@ -92,7 +97,9 @@ async fn captures_state_after_each_expanded_event() {
                     thread_id: input.run_agent_input.thread_id,
                     run_id: input.run_agent_input.run_id,
                     result: Some(serde_json::json!({"success": true})),
-                    outcome: Some(RunFinishedOutcome::Success),
+                    outcome: Some(RunFinishedOutcome::Success {
+                        pending_tool_call_ids: None,
+                    }),
                     usage: Vec::new(),
                     base: BaseEventFields::default(),
                 })),

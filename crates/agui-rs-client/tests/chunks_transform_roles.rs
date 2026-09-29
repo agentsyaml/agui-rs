@@ -1,7 +1,8 @@
 use agui_rs_client::expand_chunks;
 use agui_rs_core::{
-    event_factories::create_text_message_chunk_event, factory, AgUiError, BaseEventFields, Event,
-    TextMessageContentEvent, TextMessageEndEvent, TextMessageRole, TextMessageStartEvent,
+    event_factories::create_text_message_chunk_event, factory, AgUiError, AttributableFields,
+    BaseEventFields, Event, TextMessageContentEvent, TextMessageEndEvent, TextMessageRole,
+    TextMessageStartEvent,
 };
 use futures::{stream, StreamExt};
 
@@ -21,6 +22,7 @@ fn text_start(message_id: &str, role: TextMessageRole) -> Event {
         role,
         name: None,
         base: BaseEventFields::default(),
+        attributable: AttributableFields::default(),
     })
 }
 
@@ -29,6 +31,7 @@ fn text_content(message_id: &str, delta: &str) -> Event {
         message_id: message_id.to_string(),
         delta: delta.to_string(),
         base: BaseEventFields::default(),
+        attributable: AttributableFields::default(),
     })
 }
 
@@ -36,6 +39,7 @@ fn text_end(message_id: &str) -> Event {
     Event::TextMessageEnd(TextMessageEndEvent {
         message_id: message_id.to_string(),
         base: BaseEventFields::default(),
+        attributable: AttributableFields::default(),
     })
 }
 

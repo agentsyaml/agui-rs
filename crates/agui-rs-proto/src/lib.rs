@@ -1,10 +1,9 @@
 //! Protobuf binary encoding for AG-UI events.
 //!
-//! Mirrors the canonical TypeScript `@ag-ui/proto` package: encodes/decodes the
-//! 16 base event variants plus the two chunk variants and the three subagent
-//! variants defined in `events.proto`.
-//! Reasoning / activity / thinking events are **not** part of the protobuf
-//! schema upstream and are rejected by [`encode`] with [`AgUiError::Unsupported`].
+//! Mirrors the canonical TypeScript `@ag-ui/proto` package: encodes/decodes all
+//! 31 event variants defined in `upstream-spec/events.proto`, including the
+//! tool-call-result, activity and reasoning ones. `schema.rs` is verified against
+//! the vendored upstream `.proto` by `tests/proto_drift.rs`.
 //!
 //! The binary media type is [`AGUI_MEDIA_TYPE_PROTOBUF`].
 

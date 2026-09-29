@@ -1,7 +1,8 @@
 use agui_rs_client::{default_apply_events, expand_chunks};
 use agui_rs_core::{
-    event_factories::create_text_message_chunk_event, factory, AgUiError, BaseEventFields, Event,
-    Message, TextMessageContentEvent, TextMessageEndEvent, TextMessageRole, TextMessageStartEvent,
+    event_factories::create_text_message_chunk_event, factory, AgUiError, AttributableFields,
+    BaseEventFields, Event, Message, TextMessageContentEvent, TextMessageEndEvent, TextMessageRole,
+    TextMessageStartEvent,
 };
 use futures::{stream, StreamExt};
 
@@ -21,6 +22,7 @@ fn text_start(message_id: &str, role: TextMessageRole) -> Event {
         role,
         name: None,
         base: BaseEventFields::default(),
+        attributable: AttributableFields::default(),
     })
 }
 
@@ -29,6 +31,7 @@ fn text_content(message_id: &str, delta: &str) -> Event {
         message_id: message_id.to_string(),
         delta: delta.to_string(),
         base: BaseEventFields::default(),
+        attributable: AttributableFields::default(),
     })
 }
 
@@ -36,6 +39,7 @@ fn text_end(message_id: &str) -> Event {
     Event::TextMessageEnd(TextMessageEndEvent {
         message_id: message_id.to_string(),
         base: BaseEventFields::default(),
+        attributable: AttributableFields::default(),
     })
 }
 
@@ -209,6 +213,7 @@ async fn should_default_to_assistant_role_when_not_specified() {
         Event::TextMessageStart(TextMessageStartEvent {
             message_id: "msg-default".into(),
             role: TextMessageRole::default(),
+            attributable: AttributableFields::default(),
             name: None,
             base: BaseEventFields::default(),
         }),

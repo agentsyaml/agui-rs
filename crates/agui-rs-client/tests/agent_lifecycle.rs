@@ -9,6 +9,7 @@ use agui_rs_core::{
 use async_trait::async_trait;
 use futures::{stream, stream::BoxStream};
 use serde_json::json;
+use std::sync::{Arc, Mutex};
 
 /// Agent that supports neither connect nor capabilities (defaults).
 struct PlainAgent;
@@ -58,6 +59,8 @@ fn config_with_state() -> AgentConfig {
         thread_id: Some("thread-test".into()),
         initial_messages: vec![Message::Assistant(AssistantMessage {
             id: "msg-1".into(),
+            metadata: None,
+            subagent_run_id: None,
             content: Some("Hello world".into()),
             name: None,
             tool_calls: None,
@@ -93,6 +96,8 @@ async fn cloned_runner_has_independent_message_state() {
     runner
         .add_message(Message::Assistant(AssistantMessage {
             id: "msg-2".into(),
+            metadata: None,
+            subagent_run_id: None,
             content: Some("only in original".into()),
             name: None,
             tool_calls: None,
@@ -112,7 +117,9 @@ async fn connect_agent_uses_connect_stream() {
         .expect("connect should succeed");
     assert_eq!(
         result.outcome,
-        Some(agui_rs_core::RunFinishedOutcome::Success)
+        Some(agui_rs_core::RunFinishedOutcome::Success {
+            pending_tool_call_ids: None,
+        })
     );
 }
 
@@ -160,7 +167,9 @@ async fn debug_config_runs_with_lifecycle_logging_enabled() {
         .expect("debug run should succeed");
     assert_eq!(
         result.outcome,
-        Some(agui_rs_core::RunFinishedOutcome::Success)
+        Some(agui_rs_core::RunFinishedOutcome::Success {
+            pending_tool_call_ids: None,
+        })
     );
 }
 
@@ -178,3 +187,87 @@ async fn debug_logger_forced_is_enabled_regardless_of_env() {
 // SKIPPED: per-stream-stage debug logging ([VERIFY]/[SSE]/[TRANSFORM]/[CHUNK]
 // prefixes) is a documented divergence — Rust threads no logger through the pure
 // stream functions; lifecycle logging is done at the runner level instead.
+
+// -- protocolVersion declaration (upstream agent/agent.ts:560-565) -------------
+
+/// Captures the `RunAgentInput` it was asked to run.
+struct RecordingAgent {
+    seen: Arc<Mutex<Option<RunAgentInput>>>,
+}
+
+#[async_trait]
+impl Agent for RecordingAgent {
+    async fn run(&self, input: RunAgentInput) -> Result<BoxStream<'static, Result<Event>>> {
+        *self.seen.lock().unwrap() = Some(input);
+        Ok(Box::pin(stream::iter(vec![
+            Ok(factory::run_started("thread-1", "run-1")),
+            Ok(factory::run_finished("thread-1", "run-1")),
+        ])))
+    }
+}
+
+async fn input_seen_by(
+    mut runner: AgentRunner<RecordingAgent>,
+    seen: Arc<Mutex<Option<RunAgentInput>>>,
+) -> Option<RunAgentInput> {
+    runner
+        .run_agent(RunAgentParameters::default())
+        .await
+        .expect("run should succeed");
+    seen.lock().unwrap().clone()
+}
+
+#[tokio::test]
+async fn declares_protocol_version_on_every_run_agent_input() {
+    let seen = Arc::new(Mutex::new(None));
+    let input = input_seen_by(
+        AgentRunner::new(
+            RecordingAgent {
+                seen: Arc::clone(&seen),
+            },
+            AgentConfig::default(),
+        ),
+        seen,
+    )
+    .await;
+
+    assert_eq!(
+        input
+            .expect("agent saw an input")
+            .protocol_version
+            .as_deref(),
+        Some("1.0")
+    );
+}
+
+#[tokio::test]
+async fn omits_protocol_version_when_the_peer_ceiling_is_pinned_below_this_client() {
+    // "A downgraded peer predates the field, and an unknown input member is
+    // exactly what a strict old parser could reject."
+    let seen = Arc::new(Mutex::new(None));
+    let input = input_seen_by(
+        AgentRunner::new(
+            RecordingAgent {
+                seen: Arc::clone(&seen),
+            },
+            AgentConfig::default(),
+        )
+        .with_max_protocol_version("0.0.1"),
+        seen,
+    )
+    .await;
+
+    assert_eq!(
+        input.expect("agent saw an input").protocol_version,
+        None,
+        "a pinned-below ceiling must suppress the declaration"
+    );
+}
+
+#[tokio::test]
+#[allow(deprecated)]
+async fn max_version_is_the_deprecated_alias_of_the_peer_ceiling() {
+    let runner =
+        AgentRunner::new(PlainAgent, AgentConfig::default()).with_max_protocol_version("1.0");
+    assert_eq!(runner.max_version(), "1.0");
+}

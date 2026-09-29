@@ -46,7 +46,24 @@ pub fn proto_to_json(value: &ProtoValue) -> JsonValue {
     }
 }
 
-/// Helper: optional JSON → optional proto.
-pub fn json_opt_to_proto(value: Option<&JsonValue>) -> Option<ProtoValue> {
-    value.map(json_to_proto)
+/// Converts a JSON value into a `google.protobuf.Struct`.
+///
+/// Seven upstream fields are typed `Struct` rather than `Value` — every
+/// `metadata`, plus `Message.activity_content` and `ActivitySnapshotEvent.
+/// content`. The two are *not* wire-interchangeable: a `Value` carrying an
+/// object puts its contents in field 7, which a peer reading a `Struct` (field
+/// 1, a map entry) drops on the floor. Anything that is not an object encodes as
+/// an empty struct.
+pub fn json_to_struct(value: &JsonValue) -> Struct {
+    match json_to_proto(value).kind {
+        Some(Kind::StructValue(strukt)) => strukt,
+        _ => Struct::default(),
+    }
+}
+
+/// Converts a `google.protobuf.Struct` back into a JSON object.
+pub fn struct_to_json(value: &Struct) -> JsonValue {
+    proto_to_json(&ProtoValue {
+        kind: Some(Kind::StructValue(value.clone())),
+    })
 }

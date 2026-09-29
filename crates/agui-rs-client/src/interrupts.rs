@@ -78,13 +78,18 @@ pub fn interrupt_is_expired(interrupt: &Interrupt, now_iso: &str) -> bool {
 }
 
 /// Validates that `resume` entries address every still-open interrupt and that
-/// none of those interrupts has expired.
+/// no expired interrupt is left answered rather than cancelled.
 ///
 /// Mirrors the enforcement TypeScript `AbstractAgent.onInitialize` performs
-/// before a run when `pendingInterrupts` is non-empty:
+/// before a `runAgent` run when `pendingInterrupts` is non-empty
+/// (`agent/agent.ts:576-601`):
 /// - every pending interrupt id must appear in `resume`, otherwise a
 ///   [`AgUiError::Validation`] listing the uncovered ids is returned;
-/// - any pending interrupt whose `expiresAt <= now_iso` is rejected.
+/// - an expired interrupt is foreclosed, but a `cancelled` entry is the
+///   conforming way past it: *"Expiry forecloses ANSWERING, not resolving the
+///   thread … Throwing on mere presence — which this once did — made an
+///   expired interrupt block its thread forever, since coverage is mandatory
+///   and no entry could ever satisfy this check."*
 ///
 /// `now_iso` is the current time as an ISO-8601 string; pass the producer's
 /// clock so the check stays dependency-free in `agui-rs-core`/`-client`.
@@ -117,9 +122,15 @@ pub fn ensure_resume_covers(
     }
 
     for interrupt in pending {
-        if interrupt_is_expired(interrupt, now_iso) {
+        if !interrupt_is_expired(interrupt, now_iso) {
+            continue;
+        }
+        let cancelled = resume.iter().any(|entry| {
+            entry.interrupt_id == interrupt.id && matches!(entry.status, ResumeStatus::Cancelled)
+        });
+        if !cancelled {
             return Err(AgUiError::validation(format!(
-                "Interrupt {} expired at {}",
+                "Interrupt {} expired at {} and can no longer be answered. Cancel it to continue the thread.",
                 interrupt.id,
                 interrupt.expires_at.as_deref().unwrap_or_default()
             )));
@@ -171,11 +182,13 @@ pub fn build_resume_array(
                 interrupt_id: interrupt.id.clone(),
                 status: ResumeStatus::Resolved,
                 payload: payload.clone(),
+                metadata: None,
             },
             Some(ResumeResponse::Cancelled) => ResumeEntry {
                 interrupt_id: interrupt.id.clone(),
                 status: ResumeStatus::Cancelled,
                 payload: None,
+                metadata: None,
             },
             None => unreachable!("validated missing responses before mapping"),
         })
@@ -187,18 +200,20 @@ mod tests {
     use std::collections::HashMap;
 
     use agui_rs_core::{
-        factory, BaseEventFields, Event, Interrupt, RunErrorEvent, RunFinishedEvent,
-        RunFinishedOutcome,
+        factory, BaseEventFields, Event, Interrupt, ResumeEntry, ResumeStatus, RunErrorEvent,
+        RunFinishedEvent, RunFinishedOutcome,
     };
     use serde_json::json;
 
     use super::{
-        build_resume_array, get_run_outcome, is_interrupt_expired, ResumeResponse, RunOutcome,
+        build_resume_array, ensure_resume_covers, get_run_outcome, is_interrupt_expired,
+        ResumeResponse, RunOutcome,
     };
 
     fn interrupt(id: &str, expires_at: Option<&str>) -> Interrupt {
         Interrupt {
             id: id.into(),
+            subagent_run_id: None,
             reason: "tool_call".into(),
             message: None,
             tool_call_id: None,
@@ -230,7 +245,9 @@ mod tests {
     fn get_run_outcome_returns_finished_success() {
         assert_eq!(
             get_run_outcome(&[factory::run_finished("t1", "r1")]),
-            RunOutcome::Finished(Some(RunFinishedOutcome::Success))
+            RunOutcome::Finished(Some(RunFinishedOutcome::Success {
+                pending_tool_call_ids: None,
+            }))
         );
     }
 
@@ -284,7 +301,9 @@ mod tests {
 
         assert_eq!(
             get_run_outcome(&events),
-            RunOutcome::Finished(Some(RunFinishedOutcome::Success))
+            RunOutcome::Finished(Some(RunFinishedOutcome::Success {
+                pending_tool_call_ids: None,
+            }))
         );
     }
 
@@ -356,5 +375,60 @@ mod tests {
 
         let error = build_resume_array(&interrupts, &responses).unwrap_err();
         assert!(error.to_string().contains("i2"));
+    }
+
+    fn entry(id: &str, status: ResumeStatus) -> ResumeEntry {
+        ResumeEntry {
+            interrupt_id: id.into(),
+            status,
+            payload: None,
+            metadata: None,
+        }
+    }
+
+    const NOW: &str = "2026-09-17T12:00:00Z";
+
+    #[test]
+    fn uncovered_interrupts_are_rejected() {
+        let error = ensure_resume_covers(
+            &[interrupt("i1", None), interrupt("i2", None)],
+            &[entry("i1", ResumeStatus::Resolved)],
+            NOW,
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "event validation failed: Thread has 1 pending interrupt(s) not addressed by resume: i2"
+        );
+    }
+
+    #[test]
+    fn an_expired_interrupt_needs_a_cancelled_entry_to_let_the_thread_through() {
+        let pending = [interrupt("i1", Some("2026-09-16T00:00:00Z"))];
+
+        // Answered, not cancelled: expiry forecloses ANSWERING.
+        let error = ensure_resume_covers(&pending, &[entry("i1", ResumeStatus::Resolved)], NOW)
+            .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "event validation failed: Interrupt i1 expired at 2026-09-16T00:00:00Z and can no longer be answered. Cancel it to continue the thread."
+        );
+
+        // Cancelled is the conforming way past an interrupt nobody answered in
+        // time, and it must NOT block its thread forever.
+        ensure_resume_covers(&pending, &[entry("i1", ResumeStatus::Cancelled)], NOW).unwrap();
+    }
+
+    #[test]
+    fn a_live_interrupt_may_be_answered_normally() {
+        let pending = [interrupt("i1", Some("2026-09-18T00:00:00Z"))];
+        ensure_resume_covers(&pending, &[entry("i1", ResumeStatus::Resolved)], NOW).unwrap();
+    }
+
+    #[test]
+    fn an_interrupt_without_an_expiry_never_expires() {
+        let pending = [interrupt("i1", None)];
+        ensure_resume_covers(&pending, &[entry("i1", ResumeStatus::Resolved)], NOW).unwrap();
     }
 }

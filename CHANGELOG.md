@@ -15,9 +15,136 @@ are layered on top without diverging from that contract.
 
 | Tracked upstream | Value |
 | ---------------- | ----- |
-| TypeScript SDK packages | `@ag-ui/core`, `@ag-ui/client`, `@ag-ui/encoder` `0.0.57` |
-| Monorepo commit | `27e5593a8ba4e372ec009f17ca61b76715d356c4` (2026-08-07) |
-| Reviewed | 2026-08-07 |
+| TypeScript SDK packages | `@ag-ui/core`, `@ag-ui/client`, `@ag-ui/encoder` `1.0.0` |
+| Monorepo commit | `024332cbb71e03e6a6bc055bed5af9c5c504471a` (2026-09-28) |
+| Reviewed | 2026-09-28 |
+
+## [0.2.0] - 2026-09-29
+
+**Breaking release.** Realigns every crate onto the official `ag-ui` **1.0.0**
+protocol, pinned at monorepo commit `024332cb`.
+
+### Decision — 100% protocol replication, no compatibility layer
+
+Earlier releases tracked `0.0.5x`, whose semantics are now superseded. This
+release adopts the 1.0.0 contract exactly and **keeps no shims for the old one**:
+where a name, field, event, or behaviour changed, it is removed rather than
+deprecated. A compatibility surface that upstream does not have is a divergence
+from the source of truth, and a dual-path API is the thing most likely to drift
+again.
+
+The upstream wire artifacts are vendored byte-for-byte into
+`crates/agui-rs-proto/upstream-spec/` (`schema.json`, `proto-freeze.txt`, and
+the three generated `.proto` files, each with recorded blob SHAs), and
+`crates/agui-rs-proto/tests/proto_drift.rs` parses the `.proto` files to
+mechanically check `src/schema.rs` against them.
+
+> Note: upstream 1.0.0 itself still ships `legacy/convert.ts` bridging 0.0.3x
+> consumers. That is retained here as the `legacy` module. What was removed is
+> strictly what upstream removed — the `THINKING_*` events.
+
+### Removed (breaking)
+
+- **`THINKING_*` events, entirely.** Upstream 1.0.0 dropped `THINKING_*` from
+  the protocol. Gone: `EventType::{ThinkingStart, ThinkingEnd,
+  ThinkingTextMessageStart, ThinkingTextMessageContent, ThinkingTextMessageEnd}`,
+  their event structs and `Event` variants, the `create_thinking_*` factories,
+  and all re-exports.
+- **The whole self-invented compat layer.** The `BackwardCompat0_0_39`,
+  `BackwardCompat0_0_45`, and `BackwardCompat0_0_47` modules and their crate-root
+  re-exports; `AgentRunner::with_max_version` and its private `version_lte`;
+  `AgentSubscriber::on_thinking_start` / `on_thinking_end` (and the
+  `ThinkingStartCtx` / `ThinkingEndCtx` aliases); the five `LegacyThinking*`
+  types and their `LegacyEvent` variants. The `legacy` conversion module and
+  `FilterToolCallsMiddleware` remain.
+- Deleted test files: `agent_version.rs`, `middleware_auto_insertion.rs`,
+  `middleware_backward_compat_0_0_{39,45,47}.rs`.
+
+### Changed (breaking) — types and fields
+
+- New `AttributableFields`: 24 events carry an extra `attributable` object,
+  flattened to an optional `subagentRunId`.
+- `InputContent` → `ContentPart` (the `Binary` variant is gone; 5 variants
+  remain, each gaining `id?`, plus `TextPart.metadata?`).
+  `InputContentSource` → `PartSource`, which gains a `File` variant.
+- `ToolCallResultEvent.content` and `ToolMessage.content` are now
+  `ToolResultContent` (`string | ContentPart[]`).
+- `RunFinishedOutcome` has three branches (new: `Cancelled`), and `Success` is
+  now a struct carrying `pending_tool_call_ids`.
+- `ActivitySnapshotEvent.replace` is `Option<bool>`; absent means "replace",
+  which is the spec's semantics.
+- `RunStartedEvent` gains `protocol_version`.
+- `RunAgentInput.state` and `.forwarded_props` are now `Option<Value>`.
+- `ExecutionCapabilities.{max_iterations, max_execution_time}`: `f64` → `u64`.
+- Seven message types gain `metadata?` and `subagentRunId?`.
+- `ToolCall` gains `metadata?`; `TokenUsage` gains
+  `cache_write_input_tokens?`; `Interrupt` gains `subagent_run_id?`;
+  `ResumeEntry` gains `metadata?`.
+- `AgentSubscriber::on_tool_call_result` third argument: `&str` →
+  `&ToolResultContent`.
+- The 0.0.45 `THINKING`→`REASONING` rewrite is now a permanent raw-JSON boundary
+  (`agui-rs-client/src/compat.rs`) rather than an opt-in middleware.
+
+### Fixed — protobuf wire format
+
+- Filled in `EventType` 19–30 and the `Event` oneof 22–31; the schema previously
+  only covered up to 18/21.
+- **Two wire bugs corrected.** `TextMessageChunk` and `ToolCallChunk` were
+  emitting a `base.type` of `TextMessageStart` / `ToolCallStart` instead of
+  their own chunk types. Seven `metadata` / `activity_content` fields were
+  declared as `google.protobuf.Value` where upstream uses `Struct`, which made
+  compliant peers **silently drop every metadata value**.
+- `Usage` token fields: `uint64` → `int64`. `RunStartedEvent` fields 4/5/6
+  (`parent_run_id`, `input`, `protocol_version`) were wrongly marked reserved
+  and are live again. Added `RunFinishedEvent.pending_tool_call_ids = 8` and
+  friends.
+
+### Changed — encoder content negotiation
+
+`Accept` selection now replicates upstream `media-type.ts` function by function
+(replacing the previous `jshttp`/`negotiator` logic). **Behavioural change:**
+`Accept: */*` and `Accept: application/*` now select **protobuf** instead of
+falling back to SSE. `q=0` is honoured as a veto, and media-type specificity
+outranks `q` (so `application/vnd.ag-ui.event+proto;q=0, */*` does *not* select
+protobuf).
+
+### Added — client behaviour
+
+- An **enforcement** stage, schema-driven from
+  `upstream-spec/schema.json`: unknown event types are dropped with a warning,
+  unknown properties on known events are stripped with a warning carrying the
+  path, and malformed values for protocol-described fields are fatal.
+- `verify` gained reasoning double open/close discipline — the reasoning span and
+  reasoning message are tracked as two independent sets, and `RUN_FINISHED`
+  fails if either is non-empty.
+- Outbound `protocolVersion` declaration (`PROTOCOL_VERSION = "1.0"`, gated by
+  `max_protocol_version`) and a three-tier inbound warning arbitration.
+- `MESSAGES_SNAPSHOT` now follows upstream HEAD semantics and gains
+  `authoritative_activity_types`.
+- `ActivityDelta`: a failed patch is now a warning, not fatal — the previous
+  content is kept and `activityType` still advances.
+- An expired interrupt is only allowed through if its resume entry is
+  `cancelled`.
+- `onInitialize` resume validation applies to `runAgent` only; `connectAgent` is
+  exempt.
+
+### Upgrading
+
+- Replace `THINKING_*` events with the `REASONING_*` family; delete any
+  `on_thinking_start` / `on_thinking_end` subscriber hooks in favour of the
+  reasoning hooks.
+- Rename `InputContent` → `ContentPart` (drop `Binary` handling) and
+  `InputContentSource` → `PartSource`.
+- Update `on_tool_call_result` handlers for `&ToolResultContent`.
+- Add the `attributable` field to hand-written event literals; match the new
+  `Success` struct form of `RunFinishedOutcome` (and handle `Cancelled`).
+- Expect protobuf field-number changes and corrected chunk `base.type`; do not
+  assume `metadata` is absent — it is now carried on the wire.
+- Clients sending `Accept: */*` will now receive protobuf, not SSE. Send an
+  explicit `Accept: text/event-stream` if you need SSE.
+- Remove any use of `with_max_version`, `BackwardCompat0_0_*`, or the
+  `LegacyThinking*` types.
+
 
 ## [0.1.3] - 2026-08-07
 

@@ -6,7 +6,7 @@ streaming structured events between AI agents and front-end / orchestration
 clients.
 
 This SDK is designed to be a peer of the official TypeScript and Python SDKs,
-covering the full protocol surface: 33 event types, multimodal messages,
+covering the full protocol surface: 31 event types, multimodal messages,
 SSE-based HTTP transport, chunk expansion, event-ordering verification,
 state/messages reduction, and an `axum`-based server.
 
@@ -24,9 +24,9 @@ are layered on top without diverging from that contract.
 
 | Tracked upstream | Value |
 | ---------------- | ----- |
-| TypeScript SDK packages | `@ag-ui/core` / `@ag-ui/client` / `@ag-ui/encoder` **0.0.57** |
-| Monorepo commit | `27e5593a` (2026-08-07) |
-| Reviewed | 2026-08-07 |
+| TypeScript SDK packages | `@ag-ui/core` / `@ag-ui/client` / `@ag-ui/encoder` **1.0.0** |
+| Monorepo commit | `024332cb` (2026-09-28) |
+| Reviewed | 2026-09-28 |
 | Examples baseline | `integrations/server-starter-all-features` |
 
 Full field-by-field audit: **[`docs/typescript-alignment.md`](docs/typescript-alignment.md)**.
@@ -37,7 +37,7 @@ Change history: **[`CHANGELOG.md`](CHANGELOG.md)**.
 | Area | TypeScript SDK (source of truth) | This SDK | Status |
 | ---- | -------------------------------- | -------- | ------ |
 | Wire format (`type` discriminator, `camelCase`) | `SCREAMING_SNAKE_CASE` types | identical | ✅ aligned |
-| Event surface | 33 + 5 deprecated `THINKING_*` | identical set + wire names | ✅ aligned |
+| Event surface | 31 active (no `THINKING_*` in 1.0) | identical set + wire names | ✅ aligned |
 | `State` typing | `State = any` (untyped) | `State = Value` (untyped) | ✅ aligned |
 | Error model | `is_retryable()` / `is_user_input()` | structured `Http`/`Transport` + same classifiers | ✅ aligned |
 | Interrupt resume enforcement (`pendingInterrupts`) | enforced in `AbstractAgent` | `AgentRunner::pending_interrupts` + `ensure_resume_covers` | ✅ aligned |
@@ -62,7 +62,7 @@ helper** (e.g. a typed accessor on `RunAgentResult`) rather than threading a
 
 | Crate            | Purpose                                                                 |
 | ---------------- | ----------------------------------------------------------------------- |
-| `agui-rs-core`     | Protocol data types, all 33 event payloads, `Event` discriminated enum. |
+| `agui-rs-core`     | Protocol data types, all 31 event payloads, `Event` discriminated enum. |
 | `agui-rs-encoder`  | Wire-format encoder. SSE + protobuf (length-prefixed) negotiation. |
 | `agui-rs-proto`    | Protobuf binary encode/decode (`prost`, no `protoc` build dependency). |
 | `agui-rs-client`   | `Agent` trait, `HttpAgent`, runner, subscriber, chunk/verify/apply pipeline. |
@@ -266,26 +266,29 @@ the user’s `RunHandler`, and frames the resulting event stream as SSE.
 
 ## Protocol coverage
 
-- **33 event types** (lifecycle, text message, tool call, state, step,
-  reasoning, activity, raw, custom) plus the 5 deprecated `THINKING_*` events
-  required for backward compatibility with older Python agents.
-- **Multimodal user input**: text, image, audio, video, document, binary.
+- **31 event types** (lifecycle, text message, tool call, state, step,
+  reasoning, activity, raw, custom). The `THINKING_*` family that 0.0.5x
+  carried for older Python agents was removed by upstream in 1.0.0 and is
+  **not** supported here — use the `REASONING_*` events.
+- **Multimodal user input**: text, image, audio, video, document (`ContentPart`
+  / `PartSource`).
 - **Tool calls** with chunked argument streaming.
 - **State** via `STATE_SNAPSHOT` and `STATE_DELTA` (JSON Patch RFC 6902).
 - **Resume** with `ResumeEntry` for interrupt continuations.
-- **Content negotiation**: `text/event-stream` (default) and the protobuf
-  media type `application/vnd.ag-ui.event+proto` (encode via
+- **Content negotiation**: `text/event-stream` and the protobuf media type
+  `application/vnd.ag-ui.event+proto` (encode via
   `EventEncoder::encode_protobuf`, decode via `parse_proto_stream`, both using
-  the `agui-rs-proto` crate; reasoning/activity/thinking events are outside the
-  canonical proto schema).
+  the `agui-rs-proto` crate). Per upstream `media-type.ts`, `Accept: */*` and
+  `Accept: application/*` select **protobuf** — send an explicit
+  `Accept: text/event-stream` if you need SSE.
 
 ---
 
 ## Testing
 
 ```
-cargo test --workspace          # 1143 tests (unit + ported TS integration)
-cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace          # 1326 tests (unit + ported TS integration)
+cargo clippy --workspace --all-features --all-targets -- -D warnings
 cargo build --workspace --examples
 ```
 
@@ -293,17 +296,22 @@ Test counts per crate:
 
 | Crate           | Tests |
 | --------------- | ----- |
-| `agui-rs-core`    | 140   |
-| `agui-rs-encoder` |  13   |
-| `agui-rs-client`  | 977   |
-| `agui-rs-server`  |  13   |
+| `agui-rs-core`    | 163   |
+| `agui-rs-encoder` |  22   |
+| `agui-rs-proto`   |  31   |
+| `agui-rs-client`  | 1096  |
+| `agui-rs-server`  |  14   |
 
 The `agui-rs-client` suite mirrors the TypeScript SDK's
 `packages/client/__tests__` directory across `verify/`, `chunks/`,
 `transform/`, `run/`, `middleware/`, `interrupts/`, and `agent/`. Cases that
 depend on TypeScript-only API surface (e.g. `AbstractAgent.clone()`,
-`pendingInterrupts`, `maxVersion`) are kept as `// SKIPPED:` markers in the
-corresponding test files so the parity gap stays explicit.
+`pendingInterrupts`, the `events$` replay subject, `stopPropagation` chaining)
+are kept as `// SKIPPED:` markers in the corresponding test files so the parity
+gap stays explicit. See
+[`docs/test-reconciliation.md`](docs/test-reconciliation.md) for the per-file
+mapping — **note that its case counts predate the 1.0.0 migration and need to
+be re-run.**
 
 End-to-end SSE round-trip is exercised by running the `echo_agent` example
 and hitting it with `curl` (see *Quick start*).

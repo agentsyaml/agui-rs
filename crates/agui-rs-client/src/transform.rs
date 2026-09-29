@@ -1,8 +1,10 @@
+use crate::compat::{map_raw_event, CompatBoundary};
 use agui_rs_core::{AgUiError, Event, Result};
 use async_stream::try_stream;
 use bytes::Bytes;
 use eventsource_stream::Eventsource;
 use futures::{stream::BoxStream, Stream, StreamExt, TryStreamExt};
+use serde_json::Value;
 
 pub use agui_rs_core::{AGUI_MEDIA_TYPE_PROTOBUF, AGUI_MEDIA_TYPE_SSE};
 
@@ -30,9 +32,25 @@ where
     Box::pin(try_stream! {
         let mapped = stream.map_err(|error| AgUiError::transport(error.to_string(), true));
         let mut stream = mapped.eventsource();
+        // The always-on compatibility boundary runs here, on the raw JSON,
+        // because it must be in place before typed deserialization: the 1.0
+        // event set has no THINKING_* variants, so serde would reject such a
+        // frame before any event-level code could see it.
+        let mut boundary = CompatBoundary::default();
         while let Some(item) = stream.next().await {
             let event = item.map_err(|error| AgUiError::transport(error.to_string(), true))?;
-            let parsed = serde_json::from_str::<Event>(&event.data)?;
+            let raw: Value = serde_json::from_str(&event.data)?;
+            let raw = map_raw_event(&mut boundary, raw);
+            // Enforcement, after the compatibility boundary and before typed
+            // deserialization: it drops what the protocol does not describe and
+            // strips what a known event does not name, each with a warning, and
+            // leaves malformed KNOWN values for serde to reject fatally. It
+            // precedes chunk expansion, so a chunk is enforced as an event of
+            // its own rather than arriving here already repaired.
+            let Some(raw) = crate::enforce::enforce_event(raw) else {
+                continue;
+            };
+            let parsed = serde_json::from_value::<Event>(raw)?;
             yield parsed;
         }
     })

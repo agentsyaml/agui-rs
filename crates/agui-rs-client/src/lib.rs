@@ -10,7 +10,9 @@ mod agent;
 mod apply;
 mod chunks;
 pub mod compact;
+mod compat;
 pub mod debug_logger;
+pub mod enforce;
 mod error;
 mod http;
 pub mod interrupts;
@@ -19,6 +21,7 @@ mod middleware;
 mod subscriber;
 mod transform;
 mod verify;
+mod version;
 
 pub use agent::{
     AbortHandle, Agent, AgentConfig, AgentRunner, RunAgentParameters, RunAgentResult, Subscription,
@@ -35,7 +38,6 @@ pub use interrupts::{
 };
 pub use legacy::convert_legacy_events;
 pub use middleware::{
-    backward_compat::{BackwardCompat0_0_39, BackwardCompat0_0_45, BackwardCompat0_0_47},
     filter_tool_calls::{FilterToolCallsConfig, FilterToolCallsMiddleware},
     Middleware, MiddlewareChain,
 };
@@ -50,5 +52,9 @@ pub use transform::{
     AGUI_MEDIA_TYPE_PROTOBUF, AGUI_MEDIA_TYPE_SSE,
 };
 pub use verify::verify_events;
+pub use version::{
+    compare_declared_protocol, compare_versions, warn_on_producer_declaration, DeclaredVerdict,
+    PROTOCOL_VERSION,
+};
 
 pub use agui_rs_core::{Event, Message, RunAgentInput, State};
