@@ -449,13 +449,13 @@ fn apply_messages_snapshot(messages: &mut Vec<Message>, event: &MessagesSnapshot
 }
 
 fn apply_activity_snapshot(messages: &mut Vec<Message>, event: &ActivitySnapshotEvent) {
-    let activity_message = Message::Activity(ActivityMessage {
+    let mut activity_message = ActivityMessage {
         id: event.message_id.clone(),
         activity_type: event.activity_type.clone(),
         content: event.content.clone(),
         subagent_run_id: event.attributable.subagent_run_id.clone(),
         metadata: None,
-    });
+    };
 
     // Absent `replace` means replace: the snapshot is the authoritative
     // content for the activity it names.
@@ -466,15 +466,23 @@ fn apply_activity_snapshot(messages: &mut Vec<Message>, event: &ActivitySnapshot
         .position(|message| message.id() == event.message_id)
     {
         match &messages[index] {
-            Message::Activity(_) if replace => messages[index] = activity_message,
+            Message::Activity(existing) if replace => {
+                // The upstream replace spreads the existing message
+                // (`apply/default.ts:882-884`): *"Spread carries the accumulated
+                // metadata across the replace — a snapshot replaces content, not
+                // the metadata built up so far."* Attribution is the exception
+                // upstream re-mints and we re-take it above.
+                activity_message.metadata = existing.metadata.clone();
+                messages[index] = Message::Activity(activity_message);
+            }
             Message::Activity(_) => {}
-            _ if replace => messages[index] = activity_message,
+            _ if replace => messages[index] = Message::Activity(activity_message),
             _ => {}
         }
         return;
     }
 
-    messages.push(activity_message);
+    messages.push(Message::Activity(activity_message));
 }
 
 fn apply_activity_delta(messages: &mut [Message], event: &ActivityDeltaEvent) -> Result<()> {
@@ -522,12 +530,17 @@ fn apply_activity_delta(messages: &mut [Message], event: &ActivityDeltaEvent) ->
         return Ok(());
     };
 
+    // The upstream rebuild spreads the message it read
+    // (`apply/default.ts:979-983`: `{...existingActivityMessage, content,
+    // activityType}`), so the metadata built up so far rides along. Upstream
+    // merges `event.metadata` in first — that half is the unimplemented
+    // `mergeMetadata` gap, not this one.
     messages[index] = Message::Activity(ActivityMessage {
         id: event.message_id.clone(),
         activity_type: event.activity_type.clone(),
         content,
         subagent_run_id: existing.subagent_run_id.clone(),
-        metadata: None,
+        metadata: existing.metadata.clone(),
     });
 
     Ok(())
@@ -898,6 +911,95 @@ mod tests {
                     assert_eq!(message.content.get("step"), Some(&json!("keep")));
                 }
                 _ => panic!("expected activity message"),
+            }
+        }
+
+        /// A snapshot replaces content, not the metadata built up so far. The
+        /// accumulation here is a MESSAGES_SNAPSHOT-replayed message, which is
+        /// how any metadata an activity can carry arrives.
+        #[tokio::test]
+        async fn activity_snapshot_replace_keeps_the_accumulated_metadata() {
+            let metadata = json!({"@ag-ui/client": {"authoritativeActivityTypes": ["plan"]}})
+                .as_object()
+                .unwrap()
+                .clone();
+            let mut state = ApplyState {
+                messages: vec![Message::Activity(ActivityMessage {
+                    id: "a1".into(),
+                    metadata: Some(metadata.clone()),
+                    subagent_run_id: Some("sub-1".into()),
+                    activity_type: "plan".into(),
+                    content: serde_json::Map::from_iter([(String::from("step"), json!("old"))]),
+                })],
+                state: Value::Null,
+            };
+
+            // Absent `replace` means replace.
+            apply_event(
+                &mut state,
+                &Event::ActivitySnapshot(ActivitySnapshotEvent {
+                    message_id: "a1".into(),
+                    activity_type: "execute".into(),
+                    content: serde_json::Map::from_iter([(String::from("step"), json!("new"))]),
+                    attributable: AttributableFields::default(),
+                    replace: None,
+                    base: agui_rs_core::BaseEventFields::default(),
+                }),
+            )
+            .expect("snapshot should apply");
+
+            match &state.messages[0] {
+                Message::Activity(message) => {
+                    assert_eq!(message.metadata.as_ref(), Some(&metadata));
+                    assert_eq!(message.content.get("step"), Some(&json!("new")));
+                    // A replace re-mints the activity, so it brings its own
+                    // attribution (upstream: `apply/default.ts:886-891`).
+                    assert_eq!(message.subagent_run_id, None);
+                }
+                other => panic!("expected activity message, got {other:?}"),
+            }
+        }
+
+        /// Upstream's delta rebuild is a spread of the message it read
+        /// (`apply/default.ts:979-983`); rebuilding one from scratch dropped
+        /// everything but the patched content.
+        #[tokio::test]
+        async fn activity_delta_keeps_the_accumulated_metadata() {
+            let metadata = json!({"usage": {"tokens": 12}})
+                .as_object()
+                .unwrap()
+                .clone();
+            let mut state = ApplyState {
+                messages: vec![Message::Activity(ActivityMessage {
+                    id: "a1".into(),
+                    metadata: Some(metadata.clone()),
+                    subagent_run_id: None,
+                    activity_type: "plan".into(),
+                    content: serde_json::Map::from_iter([(String::from("step"), json!("one"))]),
+                })],
+                state: Value::Null,
+            };
+
+            apply_event(
+                &mut state,
+                &Event::ActivityDelta(ActivityDeltaEvent {
+                    message_id: "a1".into(),
+                    activity_type: "execute".into(),
+                    patch: vec![json!({"op": "add", "path": "/step2", "value": "two"})],
+                    base: agui_rs_core::BaseEventFields::default(),
+                    attributable: AttributableFields::default(),
+                }),
+            )
+            .expect("delta should apply");
+
+            match &state.messages[0] {
+                Message::Activity(message) => {
+                    assert_eq!(message.metadata.as_ref(), Some(&metadata));
+                    assert_eq!(message.activity_type, "execute");
+                    assert_eq!(message.content.get("step"), Some(&json!("one")));
+                    assert_eq!(message.content.get("step2"), Some(&json!("two")));
+                }
+                other => panic!("expected activity message, got {other:?}"),
             }
         }
 

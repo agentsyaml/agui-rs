@@ -54,8 +54,7 @@ pub fn is_interrupt_expired(interrupt: &Event, now_iso: &str) -> bool {
         Event::RunFinished(event) => match &event.outcome {
             Some(RunFinishedOutcome::Interrupt { interrupts }) => interrupts
                 .iter()
-                .filter_map(|entry| entry.expires_at.as_deref())
-                .any(|expires_at| expires_at <= now_iso),
+                .any(|entry| interrupt_is_expired(entry, now_iso)),
             _ => false,
         },
         _ => false,
@@ -65,16 +64,146 @@ pub fn is_interrupt_expired(interrupt: &Event, now_iso: &str) -> bool {
 /// Checks whether a single [`Interrupt`] has expired relative to an ISO-8601
 /// `now` timestamp.
 ///
-/// Mirrors the TypeScript `isInterruptExpired(interrupt, now)` helper: an
-/// interrupt with no `expiresAt` never expires; otherwise it is expired once
-/// `expiresAt <= now`. Comparison is lexicographic, which is correct for
-/// normalized (UTC, same-precision) ISO-8601 strings — the form the protocol
-/// emits.
+/// Mirrors `isInterruptExpired(interrupt, now)` upstream
+/// (`interrupts/index.ts:13-16`): no `expiresAt` never expires, otherwise the
+/// value is PARSED as a date and `parsed <= now` decides. Parsing, not string
+/// order, is the whole behaviour — `2026-09-18T00:00:00+02:00` is earlier than
+/// `2026-09-17T23:00:00Z` while sorting after it, and the schema deliberately
+/// leaves the field unconstrained: *"a consumer comparing this value will parse
+/// it as a date, so a value that is not one leaves the interrupt looking
+/// permanently unexpired"* (`$defs.Interrupt.properties.expiresAt`).
 pub fn interrupt_is_expired(interrupt: &Interrupt, now_iso: &str) -> bool {
-    match interrupt.expires_at.as_deref() {
-        Some(expires_at) => expires_at <= now_iso,
-        None => false,
+    let Some(expires_at) = interrupt.expires_at.as_deref() else {
+        return false;
+    };
+    match (
+        parse_iso8601_millis(expires_at),
+        parse_iso8601_millis(now_iso),
+    ) {
+        (Some(expires), Some(now)) => expires <= now,
+        // No comparison, so no expiry: `new Date("soon")` upstream is an
+        // Invalid Date and every comparison against it is false. An
+        // unparseable `now_iso` is the caller's own clock failing the same
+        // way.
+        _ => false,
     }
+}
+
+/// Epoch milliseconds for an ISO-8601 date, or `None` when the value is not
+/// one — the `Invalid Date` case, which must never expire.
+///
+/// Deliberately narrow: `YYYY-MM-DD`, optional `T HH:MM[:SS[.fff]]`, optional
+/// `Z` or `±HH[:]MM`. The schema pins no format (`expiresAt` is a bare
+/// `string`), so this covers the convention it documents and nothing more;
+/// anything else reads as unexpired, which is the schema's own instruction.
+fn parse_iso8601_millis(value: &str) -> Option<i64> {
+    let value = value.trim();
+    let (date, clock) = match value.find(['T', 't']) {
+        Some(index) => (&value[..index], Some(&value[index + 1..])),
+        None => (value, None),
+    };
+
+    let mut date_parts = date.split('-');
+    let year = digits(date_parts.next()?)?;
+    let month = digits(date_parts.next()?)?;
+    let day = digits(date_parts.next()?)?;
+    if date_parts.next().is_some() || !(1..=12).contains(&month) || day < 1 {
+        return None;
+    }
+    const MONTH_DAYS: [i64; 12] = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    let leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
+    let mut month_days = MONTH_DAYS[(month - 1) as usize];
+    if month == 2 && leap {
+        month_days = 29;
+    }
+    if day > month_days {
+        return None;
+    }
+
+    let (hour, minute, second, millis, offset) = match clock {
+        None => (0, 0, 0, 0, 0),
+        Some(clock) => {
+            let (clock, offset) = split_offset(clock)?;
+            let mut clock_parts = clock.split(':');
+            let hour = digits(clock_parts.next()?)?;
+            let minute = digits(clock_parts.next()?)?;
+            let (second, millis) = match clock_parts.next() {
+                None => (0, 0),
+                Some(second) => match second.split_once('.') {
+                    Some((second, fraction)) => (digits(second)?, fraction_millis(fraction)?),
+                    None => (digits(second)?, 0),
+                },
+            };
+            if clock_parts.next().is_some() || hour > 23 || minute > 59 || second > 59 {
+                return None;
+            }
+            (hour, minute, second, millis, offset)
+        }
+    };
+
+    Some(
+        days_from_civil(year, month, day) * 86_400_000
+            + hour * 3_600_000
+            + minute * 60_000
+            + second * 1_000
+            + millis
+            - offset,
+    )
+}
+
+/// Splits a clock from its zone designator, returning the offset in millis.
+fn split_offset(clock: &str) -> Option<(&str, i64)> {
+    if let Some(clock) = clock.strip_suffix('Z').or_else(|| clock.strip_suffix('z')) {
+        return Some((clock, 0));
+    }
+    // Only a zone offset can carry a sign; hours and minutes are bare digits.
+    let index = clock.rfind(['+', '-'])?;
+    let (clock, zone) = clock.split_at(index);
+    let mut parts = zone[1..].split(':');
+    let hours = digits(parts.next()?)?;
+    let minutes = match parts.next() {
+        Some(minutes) => digits(minutes)?,
+        None => 0,
+    };
+    if parts.next().is_some() || hours > 23 || minutes > 59 {
+        return None;
+    }
+    let sign = if zone.starts_with('-') { -1 } else { 1 };
+    Some((clock, sign * (hours * 60 + minutes) * 60_000))
+}
+
+/// Fractional seconds as whole millis, truncated at the third digit — the
+/// resolution a date has.
+fn fraction_millis(fraction: &str) -> Option<i64> {
+    if fraction.is_empty() || !fraction.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    let mut millis = 0;
+    for index in 0..3 {
+        millis *= 10;
+        millis += fraction
+            .as_bytes()
+            .get(index)
+            .map_or(0, |byte| i64::from(byte - b'0'));
+    }
+    Some(millis)
+}
+
+fn digits(value: &str) -> Option<i64> {
+    if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    value.parse().ok()
+}
+
+/// Days between 1970-01-01 and a proleptic Gregorian date.
+fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
+    let year = year - i64::from(month <= 2);
+    let era = if year >= 0 { year } else { year - 399 } / 400;
+    let year_of_era = year - era * 400;
+    let day_of_year = (153 * ((month + 9) % 12) + 2) / 5 + day - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    era * 146_097 + day_of_era - 719_468
 }
 
 /// Validates that `resume` entries address every still-open interrupt and that
@@ -315,22 +444,83 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn interrupt_expiration_uses_lexicographic_iso_compare() {
-        let event = Event::RunFinished(RunFinishedEvent {
+    fn finished_with_interrupts(expires_at: Option<&str>) -> Event {
+        Event::RunFinished(RunFinishedEvent {
             thread_id: "t1".into(),
             run_id: "r1".into(),
             result: None,
             outcome: Some(RunFinishedOutcome::Interrupt {
-                interrupts: vec![interrupt("i1", Some("2026-04-22T12:00:00Z"))],
+                interrupts: vec![interrupt("i1", expires_at)],
             }),
             usage: Vec::new(),
             base: BaseEventFields::default(),
-        });
+        })
+    }
+
+    #[test]
+    fn interrupt_expiration_compares_parsed_instants() {
+        let event = finished_with_interrupts(Some("2026-04-22T12:00:00Z"));
 
         assert!(!is_interrupt_expired(&event, "2026-04-22T11:59:59Z"));
         assert!(is_interrupt_expired(&event, "2026-04-22T12:00:00Z"));
         assert!(is_interrupt_expired(&event, "2026-04-22T12:00:01Z"));
+    }
+
+    /// `+02:00` puts the expiry two hours EARLIER than its own date reads, so
+    /// a lexicographic compare — the shape this used to have — reports it live
+    /// and lets an interrupt nobody can answer block its thread as answerable.
+    #[test]
+    fn a_positive_offset_expiry_expires_against_an_earlier_utc_now() {
+        let event = finished_with_interrupts(Some("2026-09-18T00:00:00+02:00"));
+
+        assert!(!is_interrupt_expired(&event, "2026-09-17T21:59:59Z"));
+        assert!(is_interrupt_expired(&event, "2026-09-17T22:00:00Z"));
+        assert!(is_interrupt_expired(&event, "2026-09-17T23:00:00Z"));
+    }
+
+    #[test]
+    fn a_negative_offset_expiry_expires_against_a_later_utc_now() {
+        let event = finished_with_interrupts(Some("2026-09-17T20:00:00-05:00"));
+
+        assert!(!is_interrupt_expired(&event, "2026-09-18T00:59:59Z"));
+        assert!(is_interrupt_expired(&event, "2026-09-18T01:00:00Z"));
+    }
+
+    /// Millisecond resolution is what `<=` at the boundary turns on: an expiry
+    /// a single millisecond in the future has not expired yet.
+    #[test]
+    fn millisecond_precision_decides_the_boundary() {
+        let event = finished_with_interrupts(Some("2026-09-17T12:00:00.250Z"));
+
+        assert!(!is_interrupt_expired(&event, "2026-09-17T12:00:00.249Z"));
+        assert!(is_interrupt_expired(&event, "2026-09-17T12:00:00.250Z"));
+        assert!(is_interrupt_expired(&event, "2026-09-17T12:00:00.2505Z"));
+    }
+
+    /// The schema: a value that is not a date "leaves the interrupt looking
+    /// permanently unexpired". A lexicographic compare said the opposite for
+    /// every non-date that sorts after `"2026-…"`, and expired interrupts the
+    /// caller then had to cancel by hand.
+    #[test]
+    fn a_value_that_is_not_a_date_never_expires() {
+        for expires_at in ["soon", "", "not-a-date", "2026-13-45T99:99:99Z"] {
+            let event = finished_with_interrupts(Some(expires_at));
+            assert!(
+                !is_interrupt_expired(&event, "2999-01-01T00:00:00Z"),
+                "{expires_at} should leave the interrupt unexpired"
+            );
+        }
+    }
+
+    #[test]
+    fn a_leap_day_expiry_is_read_as_a_real_date() {
+        let event = finished_with_interrupts(Some("2028-02-29T00:00:00Z"));
+
+        assert!(!is_interrupt_expired(&event, "2028-02-28T23:59:59Z"));
+        assert!(is_interrupt_expired(&event, "2028-03-01T00:00:00Z"));
+        // 2027 is not a leap year, so this is not a date at all.
+        let event = finished_with_interrupts(Some("2027-02-29T00:00:00Z"));
+        assert!(!is_interrupt_expired(&event, "2999-01-01T00:00:00Z"));
     }
 
     #[test]
@@ -424,6 +614,17 @@ mod tests {
     fn a_live_interrupt_may_be_answered_normally() {
         let pending = [interrupt("i1", Some("2026-09-18T00:00:00Z"))];
         ensure_resume_covers(&pending, &[entry("i1", ResumeStatus::Resolved)], NOW).unwrap();
+    }
+
+    #[test]
+    fn an_offset_expiry_forecloses_answering_like_any_expired_one() {
+        // `NOW` is 2026-09-17T12:00:00Z; this expiry is 2026-09-16T22:00:00Z.
+        let pending = [interrupt("i1", Some("2026-09-17T00:00:00+02:00"))];
+
+        let error = ensure_resume_covers(&pending, &[entry("i1", ResumeStatus::Resolved)], NOW)
+            .unwrap_err();
+        assert!(error.to_string().contains("no longer be answered"));
+        ensure_resume_covers(&pending, &[entry("i1", ResumeStatus::Cancelled)], NOW).unwrap();
     }
 
     #[test]

@@ -68,6 +68,21 @@ fn content_negotiation_matches_official_media_type_negotiator() {
         ("text/event-stream, */*;q=0.5", true),
         // 6. malformed q -> NaN -> rejected
         ("application/vnd.ag-ui.event+proto;q=bogus", false),
+        // 6b. NaN is falsy, so it falls through to the `o` term (media-type.ts:145)
+        (
+            concat!(
+                "application/vnd.ag-ui.event+proto;q=0.9, ",
+                "application/vnd.ag-ui.event+proto;q=abc"
+            ),
+            false,
+        ),
+        (
+            concat!(
+                "application/vnd.ag-ui.event+proto;q=abc, ",
+                "application/vnd.ag-ui.event+proto;q=0.9"
+            ),
+            true,
+        ),
         // 7. params only collected before `q`
         ("application/vnd.ag-ui.event+proto;version=2", false),
         ("application/vnd.ag-ui.event+proto;q=0.5;version=2", true),

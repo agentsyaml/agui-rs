@@ -282,6 +282,25 @@ Verified against the 1.0.0 checkout. Ordered by size.
     undefined`, ESM interop, bundle-has-no-zod, two-zod-copies,
     zod-3.25 literals, and the 20-case SSE-vs-protobuf transport-parity
     differential.
+14. **The compatibility boundary's OUTBOUND half.** Upstream
+    `CompatibilityBoundary.run` rewrites the `RunAgentInput` it is about to
+    send (`compatibility-boundary.ts:177`, `input.messages =
+    input.messages.map(upgradeMessageContent)`) and the module doc notes
+    *"Outgoing legacy binary attachments are also upgraded before the transport
+    validates or sends them"*. Rust `compat.rs` only translates INBOUND raw
+    events. An outgoing legacy binary attachment is not upgraded on the way
+    out. In practice a Rust caller cannot build one: `ContentPart` has no
+    `Binary` variant, and the type stays a `Json` value in `RunAgentInput`,
+    so the shape has to be hand-written JSON. The inbound direction — the one
+    that killed a run outright — is implemented.
+15. **`normalizeLegacyRunAgentInput` for non-event request parsing.** Upstream
+    marks it `@internal` and states the scope itself
+    (`compatibility-boundary.ts:71-78`): *"Used internally for
+    `RUN_STARTED.input`; direct server request parsers do not pass through this
+    event boundary and must handle compatibility locally."* Rust
+    `agui-rs-server` parses requests straight from the wire, so it is the
+    "handle compatibility locally" case, not a client gap. `RUN_STARTED.input`
+    is covered.
 
 Everything else is implemented. Each remaining item is recorded in
 `docs/typescript-alignment.md` §4 (intentional divergences) and, where a

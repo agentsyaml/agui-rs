@@ -240,7 +240,8 @@ fn accepts_protobuf(accept: &str) -> bool {
             (best.2 - cand.2) as f32,
         ]
         .into_iter()
-        .find(|d| !(*d == 0.0)) // JS falsiness: 0 and NaN both fall through
+        // JS `||` short-circuits on falsy: 0 and NaN both fall through
+        .find(|d| *d != 0.0 && !d.is_nan())
         .is_some_and(|d| d < 0.0);
         if wins {
             best = cand;
@@ -343,6 +344,35 @@ mod tests {
         assert!(
             EventEncoder::with_accept(Some("application/vnd.ag-ui.event+proto;q=0.5x"))
                 .accepts_protobuf()
+        );
+    }
+
+    #[test]
+    fn malformed_q_falls_through_to_the_next_comparison_term() {
+        // media-type.ts:145 compares `(s || q || o) < 0` with JS `||`, where NaN
+        // is falsy and falls through to the next term just like 0 does. A
+        // malformed q on a later entry therefore does not veto an earlier one —
+        // it only lets the lower-priority `o` (header order) term decide.
+        let mt = AGUI_MEDIA_TYPE_PROTOBUF;
+        // NaN q, same specificity, later position: `o` decides, the NaN entry
+        // wins, and `q > 0` (line 36) then drops it — SSE.
+        assert!(
+            !EventEncoder::with_accept(Some(&format!("{mt};q=0.9, {mt};q=abc"))).accepts_protobuf()
+        );
+        // Same, but the NaN entry also beats a `*/*` on specificity: SSE.
+        assert!(
+            !EventEncoder::with_accept(Some(&format!("{mt};q=0.9, {mt};q=abc, */*;q=0.1")))
+                .accepts_protobuf()
+        );
+        // Mirror image: the NaN entry comes first, so `o` lets the later
+        // well-formed q replace it — protobuf.
+        assert!(
+            EventEncoder::with_accept(Some(&format!("{mt};q=abc, {mt};q=0.9"))).accepts_protobuf()
+        );
+        // A malformed q never wins on the `q` term itself, only on `o`: here the
+        // NaN entry displaces the earlier q=0 one and `q > 0` then drops it.
+        assert!(
+            !EventEncoder::with_accept(Some(&format!("{mt};q=0, {mt};q=abc"))).accepts_protobuf()
         );
     }
 
