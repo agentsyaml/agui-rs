@@ -267,23 +267,44 @@ fn buffer_other_event(
     false
 }
 
-/// Reduces all collected `STATE_SNAPSHOT` / `STATE_DELTA` events into a single
+/// Reduces a collected `STATE_SNAPSHOT` / `STATE_DELTA` window into a single
 /// `STATE_SNAPSHOT` representing the final state, then clears the accumulator.
 ///
-/// Mirrors the canonical TS `flushState`: snapshots replace the working state;
-/// deltas are applied as JSON Patch (RFC 6902). Emits nothing when there are no
-/// pending state events.
+/// Mirrors the canonical TS `flushState` (`compact.ts:381-454`). A window with
+/// **no** SNAPSHOT in it cannot be collapsed into one: deltas alone are
+/// relative to a state this window never saw, so seeding `{}` would manufacture
+/// an authoritative claim that everything else was absent and wipe consumer
+/// state on replay — those windows pass through unchanged instead
+/// (`compact.ts:407-419`). When a snapshot *is* present, folding starts at the
+/// **last** snapshot (`compact.ts:408-424`): everything before it is
+/// unobservable, because a snapshot restates the whole document.
 fn flush_state(state_events: &mut Vec<Event>, compacted: &mut Vec<Event>) {
     if state_events.is_empty() {
         return;
     }
 
+    // Upstream `compact.ts:408-418`: reverse scan for the LAST snapshot.
+    let last_snapshot = state_events
+        .iter()
+        .rposition(|event| matches!(event, Event::StateSnapshot(_)));
+
+    // Upstream `compact.ts:415-419`: no snapshot → pass the window through
+    // unchanged rather than manufacturing a snapshot.
+    let Some(last_snapshot) = last_snapshot else {
+        compacted.append(state_events);
+        return;
+    };
+
     // Upstream `compact.ts:445` collapses the metadata of every state event
-    // that went into the snapshot onto the snapshot itself.
+    // in the window onto the snapshot itself — note this is the whole window,
+    // not just the folded tail.
     let collapsed_metadata = collapse_metadata(state_events.iter());
 
+    // Upstream `compact.ts:422-424`: seed `{}` and fold only from the last
+    // snapshot onward; the snapshot replaces the document wholesale, so
+    // pre-snapshot events are dropped (`slice(lastSnapshot)`).
     let mut state = Value::Object(serde_json::Map::new());
-    for event in state_events.drain(..) {
+    for event in state_events.drain(last_snapshot..) {
         match event {
             Event::StateSnapshot(snapshot) => {
                 state = snapshot.snapshot;
@@ -300,6 +321,8 @@ fn flush_state(state_events: &mut Vec<Event>, compacted: &mut Vec<Event>) {
             _ => {}
         }
     }
+    // Drop the discarded pre-snapshot prefix left behind by the ranged drain.
+    state_events.clear();
 
     compacted.push(Event::StateSnapshot(StateSnapshotEvent {
         snapshot: state,
@@ -648,17 +671,45 @@ mod tests {
             assert_eq!(snapshot(&result[1]), &json!({"count": 2, "name": "test"}));
         }
 
+        // Upstream `compact.state-window.test.ts` → "keeps the deltas as deltas
+        // rather than manufacturing a snapshot": a window with no SNAPSHOT is
+        // relative to state this window never saw, so it passes through
+        // unchanged instead of being collapsed into an authoritative snapshot.
         #[test]
-        fn compacts_deltas_only_into_a_single_snapshot_from_empty() {
+        fn passes_a_delta_only_window_through_without_manufacturing_a_snapshot() {
+            let run_started = factory::run_started("t1", "r1");
+            let delta_1 =
+                factory::state_delta(vec![json!({"op": "add", "path": "/foo", "value": "bar"})]);
+            let delta_2 =
+                factory::state_delta(vec![json!({"op": "add", "path": "/baz", "value": 42})]);
+            let run_finished = factory::run_finished("t1", "r1");
+            let events = vec![
+                run_started.clone(),
+                delta_1.clone(),
+                delta_2.clone(),
+                run_finished.clone(),
+            ];
+
+            // Identity: no snapshot is manufactured from the deltas.
+            assert_eq!(compact_events(events.clone()), events);
+        }
+
+        // Upstream `compact.state-window.test.ts` → "folds from the LAST
+        // snapshot in the window, not from the start of it": a delta ahead of a
+        // snapshot is unobservable (the snapshot restates the whole document),
+        // so it is dropped and only the tail is folded.
+        #[test]
+        fn folds_from_the_last_snapshot_and_drops_the_prefix() {
             let result = compact_events(vec![
                 factory::run_started("t1", "r1"),
-                factory::state_delta(vec![json!({"op": "add", "path": "/foo", "value": "bar"})]),
-                factory::state_delta(vec![json!({"op": "add", "path": "/baz", "value": 42})]),
+                factory::state_delta(vec![json!({"op": "replace", "path": "/a", "value": 1})]),
+                factory::state_snapshot(json!({"b": 2})),
+                factory::state_delta(vec![json!({"op": "add", "path": "/c", "value": 3})]),
                 factory::run_finished("t1", "r1"),
             ]);
 
             assert_eq!(result.len(), 3);
-            assert_eq!(snapshot(&result[1]), &json!({"foo": "bar", "baz": 42}));
+            assert_eq!(snapshot(&result[1]), &json!({"b": 2, "c": 3}));
         }
 
         #[test]

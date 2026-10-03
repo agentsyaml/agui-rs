@@ -4,8 +4,9 @@ use agui_rs_core::{
         create_raw_event, create_text_message_chunk_event, create_tool_call_chunk_event,
     },
     factory, AgUiError, AttributableFields, BaseEventFields, Event, RawEvent,
-    TextMessageChunkEvent, TextMessageContentEvent, TextMessageEndEvent, TextMessageRole,
-    TextMessageStartEvent, ToolCallArgsEvent, ToolCallEndEvent, ToolCallStartEvent,
+    ReasoningMessageChunkEvent, TextMessageChunkEvent, TextMessageContentEvent,
+    TextMessageEndEvent, TextMessageRole, TextMessageStartEvent, ToolCallArgsEvent,
+    ToolCallEndEvent, ToolCallStartEvent,
 };
 use futures::{stream, StreamExt};
 use serde_json::json;
@@ -1135,4 +1136,326 @@ async fn passes_through_subagent_lifecycle_events_untouched() {
         ]
     );
     assert!(events.contains(&started));
+}
+
+// ---------------------------------------------------------------------------
+// Chunk metadata / rawEvent propagation — the Rust port of
+// `transform-metadata.test.ts` and the rawEvent-only case in
+// `opener-agreement.test.ts` ("transformChunks rawEvent-only chunks").
+// ---------------------------------------------------------------------------
+
+fn metadata_chunk(
+    message_id: Option<&str>,
+    delta: Option<&str>,
+    role: Option<TextMessageRole>,
+    metadata: serde_json::Value,
+) -> Event {
+    Event::TextMessageChunk(TextMessageChunkEvent {
+        message_id: message_id.map(str::to_string),
+        role,
+        delta: delta.map(str::to_string),
+        name: None,
+        base: BaseEventFields {
+            timestamp: None,
+            raw_event: None,
+            metadata: Some(metadata),
+        },
+        attributable: AttributableFields::default(),
+    })
+}
+
+#[tokio::test]
+async fn stamps_text_chunk_metadata_onto_both_synthesized_events() {
+    // transform-metadata.test.ts "stamps a text chunk's metadata onto both
+    // synthesized events".
+    let events = collect_ok(vec![metadata_chunk(
+        Some("m1"),
+        Some("Hello"),
+        None,
+        json!({"source": "openai"}),
+    )])
+    .await;
+
+    assert_eq!(events.len(), 2);
+    match (&events[0], &events[1]) {
+        (Event::TextMessageStart(start), Event::TextMessageContent(content)) => {
+            assert_eq!(start.base.metadata, Some(json!({"source": "openai"})));
+            assert_eq!(content.base.metadata, Some(json!({"source": "openai"})));
+            // The START deliberately claims no rawEvent (withChunkMetadata);
+            // only the CONTENT carries it (withChunkOrigin).
+            assert_eq!(start.base.raw_event, None);
+        }
+        other => panic!("unexpected events {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn final_metadata_only_text_chunk_reaches_the_reducer_as_zero_delta_content() {
+    // transform-metadata.test.ts "preserves metadata from a text chunk that
+    // carries no delta" — the regression test for S2: token usage and finish
+    // reason ride the LAST chunk, which is often delta-less.
+    let events = collect_ok(vec![
+        create_text_message_chunk_event(
+            Some("m1".into()),
+            None,
+            Some("Hello".into()),
+            None,
+            None,
+            None,
+        ),
+        metadata_chunk(
+            Some("m1"),
+            None,
+            None,
+            json!({"usage": {"output": 340}, "finishReason": "stop"}),
+        ),
+        factory::run_finished("t", "r"),
+    ])
+    .await;
+
+    // START("Hello") CONTENT("Hello") CONTENT("") END RUN_FINISHED — the
+    // zero-delta carrier sits just before the synthetic END.
+    let last = &events[events.len() - 3];
+    match last {
+        Event::TextMessageContent(content) => {
+            assert_eq!(content.delta, "");
+            assert_eq!(content.message_id, "m1");
+            assert_eq!(
+                content.base.metadata,
+                Some(json!({"usage": {"output": 340}, "finishReason": "stop"}))
+            );
+        }
+        other => panic!("expected zero-delta CONTENT, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn mid_stream_chunk_metadata_is_preserved() {
+    // transform-metadata.test.ts "does not carry a metadata-only chunk's
+    // metadata onto the next message" — m1's metadata stays with m1.
+    let events = collect_ok(vec![
+        create_text_message_chunk_event(
+            Some("m1".into()),
+            None,
+            Some("one".into()),
+            None,
+            None,
+            None,
+        ),
+        metadata_chunk(Some("m1"), None, None, json!({"belongsTo": "m1"})),
+        create_text_message_chunk_event(
+            Some("m2".into()),
+            None,
+            Some("two".into()),
+            None,
+            None,
+            None,
+        ),
+    ])
+    .await;
+
+    let m2_events: Vec<_> = events
+        .iter()
+        .filter(|e| {
+            matches!(
+                e,
+                Event::TextMessageStart(TextMessageStartEvent { message_id, .. })
+                    | Event::TextMessageContent(TextMessageContentEvent { message_id, .. })
+                    if message_id == "m2"
+            )
+        })
+        .collect();
+    assert!(!m2_events.is_empty());
+    for e in &m2_events {
+        let base = match e {
+            Event::TextMessageStart(s) => &s.base,
+            Event::TextMessageContent(c) => &c.base,
+            _ => unreachable!(),
+        };
+        assert_eq!(base.metadata, None, "m2 must not inherit m1's metadata");
+    }
+}
+
+#[tokio::test]
+async fn synthetic_end_never_carries_chunk_metadata() {
+    // transform-metadata.test.ts "does not put the new chunk's metadata on the
+    // END that closes the previous message" and "does not leak across a switch
+    // from a text chunk to a tool call chunk".
+    let events = collect_ok(vec![
+        create_text_message_chunk_event(
+            Some("m1".into()),
+            None,
+            Some("first".into()),
+            None,
+            None,
+            None,
+        ),
+        metadata_chunk(Some("m1"), None, None, json!({"belongsTo": "m1"})),
+        create_text_message_chunk_event(
+            Some("m2".into()),
+            None,
+            Some("second".into()),
+            None,
+            None,
+            None,
+        ),
+        factory::run_finished("t", "r"),
+    ])
+    .await;
+
+    for e in &events {
+        if let Event::TextMessageEnd(end) = e {
+            assert_eq!(end.base.metadata, None, "synthetic END is built bare");
+        }
+    }
+}
+
+#[tokio::test]
+async fn tool_and_reasoning_metadata_only_chunks_emit_zero_delta_events() {
+    // transform-metadata.test.ts "preserves metadata from a tool call chunk
+    // that carries no delta" and "...from a reasoning chunk that carries no
+    // delta".
+    let events = collect_ok(vec![
+        create_tool_call_chunk_event(
+            Some("tc1".into()),
+            Some("search".into()),
+            None,
+            Some("{}".into()),
+            None,
+            None,
+        ),
+        Event::ToolCallChunk(agui_rs_core::ToolCallChunkEvent {
+            tool_call_id: Some("tc1".into()),
+            tool_call_name: None,
+            parent_message_id: None,
+            delta: None,
+            base: BaseEventFields {
+                timestamp: None,
+                raw_event: None,
+                metadata: Some(json!({"latencyMs": 12})),
+            },
+            attributable: AttributableFields::default(),
+        }),
+        factory::run_finished("t", "r"),
+    ])
+    .await;
+    // START ARGS("{}") ARGS("") END RUN_FINISHED — the zero-delta carrier
+    // follows the real args.
+    match &events[2] {
+        Event::ToolCallArgs(args) => {
+            assert_eq!(args.delta, "");
+            assert_eq!(args.base.metadata, Some(json!({"latencyMs": 12})));
+        }
+        other => panic!("expected zero-delta ARGS, got {other:?}"),
+    }
+
+    let events = collect_ok(vec![
+        Event::ReasoningMessageChunk(ReasoningMessageChunkEvent {
+            message_id: Some("r1".into()),
+            delta: Some("thinking".into()),
+            base: BaseEventFields::default(),
+            attributable: AttributableFields::default(),
+        }),
+        Event::ReasoningMessageChunk(ReasoningMessageChunkEvent {
+            message_id: Some("r1".into()),
+            delta: None,
+            base: BaseEventFields {
+                timestamp: None,
+                raw_event: None,
+                metadata: Some(json!({"tokens": 7})),
+            },
+            attributable: AttributableFields::default(),
+        }),
+        factory::run_finished("t", "r"),
+    ])
+    .await;
+    // START CONTENT CONTENT("") END RUN_FINISHED — index 2 is the carrier.
+    match &events[2] {
+        Event::ReasoningMessageContent(content) => {
+            assert_eq!(content.delta, "");
+            assert_eq!(content.base.metadata, Some(json!({"tokens": 7})));
+        }
+        other => panic!("expected zero-delta CONTENT, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn raw_event_only_first_chunk_rides_a_zero_delta_content_event() {
+    // opener-agreement.test.ts "carries a first chunk's rawEvent on a
+    // zero-delta content event": the synthesized START claims no rawEvent, so
+    // a payload-only first chunk needs the CONTENT as its carrier.
+    let chunk = create_text_message_chunk_event(
+        Some("msg-1".into()),
+        None,
+        None,
+        None,
+        None,
+        Some(json!({"provider": "payload"})),
+    );
+    let events = collect_ok(vec![chunk, factory::run_finished("t", "r")]).await;
+
+    assert!(matches!(events[0], Event::TextMessageStart(_)));
+    match &events[1] {
+        Event::TextMessageContent(content) => {
+            assert_eq!(content.delta, "");
+            assert_eq!(content.base.raw_event, Some(json!({"provider": "payload"})));
+        }
+        other => panic!("expected CONTENT carrier, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn continuation_role_assistant_agrees_with_a_roleless_opener() {
+    // opener-agreement.test.ts "accepts a continuation repeating the assistant
+    // role the opener defaulted to": the open stream stores the RESOLVED
+    // role, so `role:"assistant"` after a role-less opener agrees rather than
+    // hard-failing the whole run.
+    let events = collect_ok(vec![
+        create_text_message_chunk_event(
+            Some("m1".into()),
+            None,
+            Some("a".into()),
+            None,
+            None,
+            None,
+        ),
+        create_text_message_chunk_event(
+            Some("m1".into()),
+            Some(TextMessageRole::Assistant),
+            Some("b".into()),
+            None,
+            None,
+            None,
+        ),
+        factory::run_finished("t", "r"),
+    ])
+    .await;
+    assert!(matches!(events[0], Event::TextMessageStart(_)));
+    assert_eq!(events.len(), 5); // start, content, content, end, run_finished
+
+    // And a genuinely conflicting role still errors.
+    let results = collect(vec![
+        create_text_message_chunk_event(
+            Some("m2".into()),
+            None,
+            Some("a".into()),
+            None,
+            None,
+            None,
+        ),
+        create_text_message_chunk_event(
+            Some("m2".into()),
+            Some(TextMessageRole::User),
+            Some("b".into()),
+            None,
+            None,
+            None,
+        ),
+    ])
+    .await;
+    // [START, CONTENT, Err] — the error lands on the second chunk.
+    assert_validation(
+        &results[2],
+        "chunk role 'user' does not match the open stream's role 'assistant'",
+    );
 }

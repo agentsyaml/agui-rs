@@ -84,6 +84,28 @@ fn attributable(subagent_run_id: Option<&str>) -> AttributableFields {
     }
 }
 
+/// `withChunkMetadata` in `chunks/transform.ts:99-100`: spreads a chunk's
+/// `metadata` onto an event synthesized from that chunk — and nothing else.
+/// Applied to the synthetic `*_START`, never to the synthetic `*_END` that
+/// closes the previous message (transform.ts:268-318 builds those bare).
+fn with_chunk_metadata(chunk: &BaseEventFields) -> BaseEventFields {
+    BaseEventFields {
+        metadata: chunk.metadata.clone(),
+        ..BaseEventFields::default()
+    }
+}
+
+/// `withChunkOrigin` in `chunks/transform.ts:112-117`: `withChunkMetadata`
+/// plus the chunk's `rawEvent`. The content event is the one that carries what
+/// the producer actually sent, so the payload rides there. Applied to the
+/// synthesized `*_CONTENT` / `*_ARGS`.
+fn with_chunk_origin(chunk: &BaseEventFields) -> BaseEventFields {
+    BaseEventFields {
+        raw_event: chunk.raw_event.clone(),
+        ..with_chunk_metadata(chunk)
+    }
+}
+
 /// The lane (owner) whose pending stream satisfies `kind` and holds
 /// `entity_id`, if any.
 fn lane_holding(
@@ -356,39 +378,43 @@ fn expand_text_chunk(lanes: &mut Lanes, chunk: TextMessageChunkEvent) -> Result<
     )?;
 
     let lane_slot = lane.clone();
-    let continuation = match lane_get(lanes, lane_slot.as_deref()) {
-        Some(OpenChunk::Text {
-            message_id,
-            role,
-            name,
-        }) => {
-            // An absent id continues; a present one must be the same message.
-            if let Some(incoming_id) = chunk.message_id.as_deref() {
-                if incoming_id != message_id.as_str() {
-                    false
-                } else {
-                    require_agreement(
-                        "text message",
-                        &message_id,
-                        "role",
-                        chunk.role.as_ref().map(|r| role_str(r)),
-                        role.as_ref().map(|r| role_str(r)),
-                    )?;
-                    require_agreement(
-                        "text message",
-                        &message_id,
-                        "name",
-                        chunk.name.as_deref(),
-                        name.as_deref(),
-                    )?;
-                    true
-                }
-            } else {
-                true
+    let mut continuation = false;
+    if let Some(OpenChunk::Text {
+        ref message_id,
+        ref role,
+        ref name,
+    }) = lane_get(lanes, lane_slot.as_deref())
+    {
+        // An absent id continues; a present one must be the same message.
+        match chunk.message_id.as_deref() {
+            None => continuation = true,
+            Some(incoming_id) if incoming_id == message_id.as_str() => {
+                require_agreement(
+                    "text message",
+                    message_id,
+                    "role",
+                    chunk.role.as_ref().map(|r| role_str(r)),
+                    // The open stream stores the RESOLVED role ("assistant"
+                    // when the opener's was absent — transform.ts:515-516),
+                    // so a later `role:"assistant"` on the same stream agrees
+                    // rather than hard-failing (transform.ts:480 compares the
+                    // resolved value).
+                    Some(role_str(
+                        role.as_ref().unwrap_or(&TextMessageRole::Assistant),
+                    )),
+                )?;
+                require_agreement(
+                    "text message",
+                    message_id,
+                    "name",
+                    chunk.name.as_deref(),
+                    name.as_deref(),
+                )?;
+                continuation = true;
             }
+            _ => {}
         }
-        _ => false,
-    };
+    }
 
     if !continuation {
         // Whatever else this lane had open ends before the new stream begins.
@@ -397,32 +423,34 @@ fn expand_text_chunk(lanes: &mut Lanes, chunk: TextMessageChunkEvent) -> Result<
         let message_id = chunk.message_id.clone().ok_or_else(|| {
             AgUiError::validation("first TEXT_MESSAGE_CHUNK must include message_id")
         })?;
-        let role = chunk.role.unwrap_or(TextMessageRole::Assistant);
+        let role = chunk.role;
 
         lane_insert(
             lanes,
             lane_slot.clone(),
             OpenChunk::Text {
                 message_id: message_id.clone(),
-                role: chunk.role,
+                role,
                 name: chunk.name.clone(),
             },
         );
 
         events.push(Event::TextMessageStart(TextMessageStartEvent {
             message_id,
-            role,
+            role: role.unwrap_or(TextMessageRole::Assistant),
             name: chunk.name.clone(),
-            base: BaseEventFields::default(),
+            base: with_chunk_metadata(&chunk.base),
             attributable: attributable(tag.as_deref()),
         }));
     }
 
-    // A content event is emitted when the chunk carries a delta. Prefer the
-    // INCOMING chunk's tag over the opener's, so a producer that attributes
-    // every chunk sees its own attribution on the output rather than a value
-    // this transform remembered.
-    if let Some(delta) = chunk.delta {
+    // A content event is emitted when the chunk carries a delta OR a provider
+    // payload — here and in the two branches below (transform.ts:572-576). A
+    // delta-less chunk with either yields an EMPTY-delta content event, which
+    // is also how metadata/rawEvent-only continuations still reach the reducer.
+    let has_content_carrier = chunk.delta.is_some() || chunk.base.raw_event.is_some();
+    if has_content_carrier {
+        let delta = chunk.delta.unwrap_or_default();
         let Some(OpenChunk::Text { message_id, .. }) = lane_get(lanes, lane_slot.as_deref()) else {
             unreachable!("text chunk just opened or continued a text message");
         };
@@ -433,7 +461,25 @@ fn expand_text_chunk(lanes: &mut Lanes, chunk: TextMessageChunkEvent) -> Result<
         events.push(Event::TextMessageContent(TextMessageContentEvent {
             message_id: message_id.clone(),
             delta,
-            base: BaseEventFields::default(),
+            base: with_chunk_origin(&chunk.base),
+            attributable: attributable(owner.as_deref()),
+        }));
+    }
+
+    // A continuation chunk carrying only metadata (or only a raw event) with no
+    // delta synthesized nothing above; emit a zero-delta CONTENT event so the
+    // metadata still reaches the reducer (transform.ts:609-650). It cannot ride
+    // the synthetic `*_END`: `finalize` discards those, and the END is built
+    // bare anyway.
+    if events.is_empty() && (chunk.base.metadata.is_some() || chunk.base.raw_event.is_some()) {
+        let Some(OpenChunk::Text { message_id, .. }) = lane_get(lanes, lane_slot.as_deref()) else {
+            unreachable!("text chunk continued an open text message to reach here");
+        };
+        let owner = tag.clone().or_else(|| lane_slot.clone());
+        events.push(Event::TextMessageContent(TextMessageContentEvent {
+            message_id,
+            delta: String::new(),
+            base: with_chunk_origin(&chunk.base),
             attributable: attributable(owner.as_deref()),
         }));
     }
@@ -509,12 +555,18 @@ fn expand_tool_chunk(lanes: &mut Lanes, chunk: ToolCallChunkEvent) -> Result<Vec
             tool_call_id,
             tool_call_name,
             parent_message_id: chunk.parent_message_id.clone(),
-            base: BaseEventFields::default(),
+            base: with_chunk_metadata(&chunk.base),
             attributable: attributable(tag.as_deref()),
         }));
     }
 
-    if let Some(delta) = chunk.delta {
+    // A content event is emitted when the chunk carries a delta OR a provider
+    // payload (transform.ts:747-750); a raw-event-only chunk yields an
+    // EMPTY-delta args event, which is also how metadata/rawEvent-only
+    // continuations still reach the reducer.
+    let has_content_carrier = chunk.delta.is_some() || chunk.base.raw_event.is_some();
+    if has_content_carrier {
+        let delta = chunk.delta.unwrap_or_default();
         let Some(OpenChunk::Tool { tool_call_id, .. }) = lane_get(lanes, lane_slot.as_deref())
         else {
             unreachable!("tool chunk just opened or continued a tool call");
@@ -523,7 +575,24 @@ fn expand_tool_chunk(lanes: &mut Lanes, chunk: ToolCallChunkEvent) -> Result<Vec
         events.push(Event::ToolCallArgs(ToolCallArgsEvent {
             tool_call_id: tool_call_id.clone(),
             delta,
-            base: BaseEventFields::default(),
+            base: with_chunk_origin(&chunk.base),
+            attributable: attributable(owner.as_deref()),
+        }));
+    }
+
+    // Continuation chunk carrying only metadata/rawEvent synthesized nothing
+    // above; emit a zero-delta ARGS so the metadata still reaches the reducer
+    // (transform.ts:777-802).
+    if events.is_empty() && (chunk.base.metadata.is_some() || chunk.base.raw_event.is_some()) {
+        let Some(OpenChunk::Tool { tool_call_id, .. }) = lane_get(lanes, lane_slot.as_deref())
+        else {
+            unreachable!("tool chunk continued an open tool call to reach here");
+        };
+        let owner = tag.clone().or_else(|| lane_slot.clone());
+        events.push(Event::ToolCallArgs(ToolCallArgsEvent {
+            tool_call_id,
+            delta: String::new(),
+            base: with_chunk_origin(&chunk.base),
             attributable: attributable(owner.as_deref()),
         }));
     }
@@ -577,12 +646,18 @@ fn expand_reasoning_chunk(
         events.push(Event::ReasoningMessageStart(ReasoningMessageStartEvent {
             message_id,
             role: ReasoningMessageRole::Reasoning,
-            base: BaseEventFields::default(),
+            base: with_chunk_metadata(&chunk.base),
             attributable: attributable(tag.as_deref()),
         }));
     }
 
-    if let Some(delta) = chunk.delta {
+    // A content event is emitted when the chunk carries a delta OR a provider
+    // payload (transform.ts:872-875); a raw-event-only chunk yields an
+    // EMPTY-delta content event, which is also how metadata/rawEvent-only
+    // continuations still reach the reducer.
+    let has_content_carrier = chunk.delta.is_some() || chunk.base.raw_event.is_some();
+    if has_content_carrier {
+        let delta = chunk.delta.unwrap_or_default();
         let Some(OpenChunk::Reasoning { message_id }) = lane_get(lanes, lane_slot.as_deref())
         else {
             unreachable!("reasoning chunk just opened or continued a reasoning message");
@@ -592,7 +667,26 @@ fn expand_reasoning_chunk(
             ReasoningMessageContentEvent {
                 message_id: message_id.clone(),
                 delta,
-                base: BaseEventFields::default(),
+                base: with_chunk_origin(&chunk.base),
+                attributable: attributable(owner.as_deref()),
+            },
+        ));
+    }
+
+    // Continuation chunk carrying only metadata/rawEvent synthesized nothing
+    // above; emit a zero-delta CONTENT so the metadata still reaches the
+    // reducer (transform.ts:906-931).
+    if events.is_empty() && (chunk.base.metadata.is_some() || chunk.base.raw_event.is_some()) {
+        let Some(OpenChunk::Reasoning { message_id }) = lane_get(lanes, lane_slot.as_deref())
+        else {
+            unreachable!("reasoning chunk continued an open reasoning message to reach here");
+        };
+        let owner = tag.clone().or_else(|| lane_slot.clone());
+        events.push(Event::ReasoningMessageContent(
+            ReasoningMessageContentEvent {
+                message_id,
+                delta: String::new(),
+                base: with_chunk_origin(&chunk.base),
                 attributable: attributable(owner.as_deref()),
             },
         ));
