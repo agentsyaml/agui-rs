@@ -5,8 +5,9 @@ use agui_rs_core::types::{
 };
 use agui_rs_core::{
     ActivityDeltaEvent, ActivitySnapshotEvent, AgUiError, AttributableFields, Event, FunctionCall,
-    Message, MessagesSnapshotEvent, ReasoningEncryptedValueSubtype, Result, State, StateDeltaEvent,
-    TextMessageRole, ToolCall, ToolCallKind, ToolCallStartEvent, UserMessageContent,
+    Message, MessagesSnapshotEvent, ReasoningEncryptedValueSubtype, Result, RunStartedEvent, State,
+    StateDeltaEvent, TextMessageRole, ToolCall, ToolCallKind, ToolCallStartEvent,
+    UserMessageContent,
 };
 use async_stream::try_stream;
 use futures::{stream::BoxStream, Stream, StreamExt};
@@ -92,17 +93,32 @@ fn message_metadata_mut(message: &mut Message) -> &mut Option<serde_json::Map<St
 pub fn apply_event(state: &mut ApplyState, event: &Event) -> Result<()> {
     match event {
         Event::TextMessageStart(event) => {
-            // The upstream idempotency guard (activity under a reused id
-            // drops the text event) lives in its own handler; ours collapses
-            // to "find or create" because `apply_event` streams into the
-            // message it finds either way.
-            let message = if let Some(existing) = state
+            // Message ids are unique across the conversation, so an activity
+            // message under this id means the producer reused it. Streaming text
+            // into it would overwrite its structured content with a string — warn
+            // and drop the event, along with its metadata, which describes a text
+            // message that never exists (`apply/default.ts:236-246`).
+            if let Some(existing) = state
                 .messages
                 .iter_mut()
                 .find(|message| message.id() == event.message_id)
             {
-                existing
-            } else {
+                if matches!(existing, Message::Activity(_)) {
+                    tracing::warn!(
+                        message_id = %event.message_id,
+                        "TEXT_MESSAGE_START: Message '{}' is an activity message — message ids must be unique across activity and text messages; dropping the event",
+                        event.message_id
+                    );
+                    return Ok(());
+                }
+                merge_event_metadata(
+                    message_metadata_mut(existing),
+                    event.base.metadata.as_ref(),
+                );
+                return Ok(());
+            }
+
+            let message = {
                 state.messages.push(new_text_message(
                     &event.message_id,
                     event.role,
@@ -114,13 +130,30 @@ pub fn apply_event(state: &mut ApplyState, event: &Event) -> Result<()> {
             merge_event_metadata(message_metadata_mut(message), event.base.metadata.as_ref());
         }
         Event::TextMessageContent(event) => {
-            let message = state
+            let Some(message) = state
                 .messages
                 .iter_mut()
                 .find(|message| message.id() == event.message_id)
-                .ok_or_else(|| {
-                    AgUiError::validation(format!("message '{}' not found", event.message_id))
-                })?;
+            else {
+                // A delta without its START is a producer defect, not a reason
+                // to fail the run (`apply/default.ts:284-286`).
+                tracing::warn!(
+                    message_id = %event.message_id,
+                    "TEXT_MESSAGE_CONTENT: No message found with ID '{}'; dropping the delta",
+                    event.message_id
+                );
+                return Ok(());
+            };
+            if matches!(message, Message::Activity(_)) {
+                // Appending here would replace the activity's structured
+                // content with a string (`apply/default.ts:287-295`).
+                tracing::warn!(
+                    message_id = %event.message_id,
+                    "TEXT_MESSAGE_CONTENT: Message '{}' is an activity message — message ids must be unique across activity and text messages; dropping the delta",
+                    event.message_id
+                );
+                return Ok(());
+            }
             append_message_content(message, &event.delta)?;
             merge_event_metadata(
                 message_metadata_mut(message),
@@ -133,14 +166,41 @@ pub fn apply_event(state: &mut ApplyState, event: &Event) -> Result<()> {
                 .iter_mut()
                 .find(|message| message.id() == event.message_id)
             {
+                if matches!(message, Message::Activity(_)) {
+                    // The matching START was dropped for the same reason, so
+                    // there is no text message to finish
+                    // (`apply/default.ts:338-343`).
+                    tracing::warn!(
+                        message_id = %event.message_id,
+                        "TEXT_MESSAGE_END: Message '{}' is an activity message — dropping the event",
+                        event.message_id
+                    );
+                    return Ok(());
+                }
                 // The end is where late-known values — token usage, finish
                 // reason — typically arrive (`apply/default.ts:362-365`).
                 merge_event_metadata(message_metadata_mut(message), event.base.metadata.as_ref());
+            } else {
+                tracing::warn!(
+                    message_id = %event.message_id,
+                    "TEXT_MESSAGE_END: No message found with ID '{}'",
+                    event.message_id
+                );
             }
         }
         Event::ToolCallStart(event) => apply_tool_call_start(&mut state.messages, event)?,
         Event::ToolCallArgs(event) => {
-            let tool_call = find_tool_call_mut(&mut state.messages, &event.tool_call_id)?;
+            let Ok(tool_call) = find_tool_call_mut(&mut state.messages, &event.tool_call_id) else {
+                // An args delta for a call the client never saw started is a
+                // producer defect, not a reason to fail the run
+                // (`apply/default.ts:492-495`).
+                tracing::warn!(
+                    tool_call_id = %event.tool_call_id,
+                    "TOOL_CALL_ARGS: No tool call found with ID '{}'; dropping the delta",
+                    event.tool_call_id
+                );
+                return Ok(());
+            };
             tool_call.function.arguments.push_str(&event.delta);
             merge_event_metadata(&mut tool_call.metadata, event.base.metadata.as_ref());
         }
@@ -149,6 +209,12 @@ pub fn apply_event(state: &mut ApplyState, event: &Event) -> Result<()> {
             // known once the call is closed (`apply/default.ts:585-589`).
             if let Ok(tool_call) = find_tool_call_mut(&mut state.messages, &event.tool_call_id) {
                 merge_event_metadata(&mut tool_call.metadata, event.base.metadata.as_ref());
+            } else {
+                tracing::warn!(
+                    tool_call_id = %event.tool_call_id,
+                    "TOOL_CALL_END: No tool call found with ID '{}'",
+                    event.tool_call_id
+                );
             }
         }
         Event::ToolCallResult(event) => {
@@ -210,13 +276,38 @@ pub fn apply_event(state: &mut ApplyState, event: &Event) -> Result<()> {
         Event::ActivityDelta(event) => apply_activity_delta(&mut state.messages, event)?,
         Event::ReasoningStart(_) | Event::ReasoningEnd(_) => {}
         Event::ReasoningMessageStart(event) => {
-            let message = if let Some(existing) = state
+            // An activity message under this id means the producer reused it;
+            // streaming reasoning into it would overwrite its structured
+            // content — warn and drop the event and its metadata
+            // (`apply/default.ts:1247-1262`).
+            if state
                 .messages
-                .iter_mut()
-                .find(|message| message.id() == event.message_id)
+                .iter()
+                .any(|message| message.id() == event.message_id)
             {
-                existing
-            } else {
+                if let Some(existing) = state
+                    .messages
+                    .iter_mut()
+                    .find(|message| message.id() == event.message_id)
+                {
+                    if matches!(existing, Message::Activity(_)) {
+                        tracing::warn!(
+                            message_id = %event.message_id,
+                            "REASONING_MESSAGE_START: Message '{}' is an activity message — message ids must be unique across activity and reasoning messages; dropping the event",
+                            event.message_id
+                        );
+                        return Ok(());
+                    }
+                    merge_event_metadata(
+                        message_metadata_mut(existing),
+                        event.base.metadata.as_ref(),
+                    );
+                    return Ok(());
+                }
+                unreachable!("found above");
+            }
+
+            let message = {
                 state
                     .messages
                     .push(Message::Reasoning(ReasoningMessage {
@@ -231,23 +322,53 @@ pub fn apply_event(state: &mut ApplyState, event: &Event) -> Result<()> {
             merge_event_metadata(message_metadata_mut(message), event.base.metadata.as_ref());
         }
         Event::ReasoningMessageContent(event) => {
-            let message = state
+            let Some(message) = state
                 .messages
                 .iter_mut()
                 .find(|message| message.id() == event.message_id)
-                .ok_or_else(|| {
-                    AgUiError::validation(format!(
-                        "reasoning message '{}' not found",
-                        event.message_id
-                    ))
-                })?;
+            else {
+                // A delta without its START is a producer defect, not a reason
+                // to fail the run (`apply/default.ts:1286`).
+                tracing::warn!(
+                    message_id = %event.message_id,
+                    "REASONING_MESSAGE_CONTENT: No message found with ID '{}'; dropping the delta",
+                    event.message_id
+                );
+                return Ok(());
+            };
+            if matches!(message, Message::Activity(_)) {
+                // Appending here would replace the activity's structured
+                // content with a string (`apply/default.ts:1289-1298`).
+                tracing::warn!(
+                    message_id = %event.message_id,
+                    "REASONING_MESSAGE_CONTENT: Message '{}' is an activity message — message ids must be unique across activity and reasoning messages; dropping the delta",
+                    event.message_id
+                );
+                return Ok(());
+            }
             append_reasoning_content(message, &event.delta)?;
             merge_event_metadata(
                 message_metadata_mut(message),
                 event.base.metadata.as_ref(),
             );
         }
-        Event::ReasoningMessageEnd(_) => {}
+        Event::ReasoningMessageEnd(event) => {
+            // The end is where late-known values — usage, finish reason — can
+            // arrive (`apply/default.ts:1361-1363`).
+            if let Some(message) = state
+                .messages
+                .iter_mut()
+                .find(|message| message.id() == event.message_id)
+            {
+                merge_event_metadata(message_metadata_mut(message), event.base.metadata.as_ref());
+            } else {
+                tracing::warn!(
+                    message_id = %event.message_id,
+                    "REASONING_MESSAGE_END: No message found with ID '{}'",
+                    event.message_id
+                );
+            }
+        }
         Event::ReasoningEncryptedValue(event) => apply_reasoning_encrypted_value(
             &mut state.messages,
             event.subtype,
@@ -258,9 +379,9 @@ pub fn apply_event(state: &mut ApplyState, event: &Event) -> Result<()> {
         | Event::ToolCallChunk(_)
         | Event::ReasoningMessageChunk(_)
         | Event::Raw(_)
-        | Event::Custom(_)
-        | Event::RunStarted(_)
-        | Event::RunFinished(_)
+        | Event::Custom(_) => {}
+        Event::RunStarted(event) => apply_run_started(&mut state.messages, event),
+        Event::RunFinished(_)
         | Event::RunError(_)
         | Event::StepStarted(_)
         | Event::StepFinished(_)
@@ -353,6 +474,23 @@ fn append_reasoning_content(message: &mut Message, delta: &str) -> Result<()> {
             "cannot append reasoning content to '{}' message",
             role_name(other)
         ))),
+    }
+}
+
+fn apply_run_started(messages: &mut Vec<Message>, event: &RunStartedEvent) {
+    // A HITL re-sync carries the conversation back in `input.messages`; add
+    // the ones the client has not seen yet, keyed by id
+    // (`apply/default.ts:1060-1080`, run-started-input.test.ts).
+    let Some(input) = event.input.as_ref() else {
+        return;
+    };
+    for message in &input.messages {
+        if !messages
+            .iter()
+            .any(|existing| existing.id() == message.id())
+        {
+            messages.push(message.clone());
+        }
     }
 }
 
@@ -597,6 +735,10 @@ fn apply_messages_snapshot(messages: &mut Vec<Message>, event: &MessagesSnapshot
 }
 
 fn apply_activity_snapshot(messages: &mut Vec<Message>, event: &ActivitySnapshotEvent) {
+    // Absent `replace` means replace: the snapshot is the authoritative
+    // content for the activity it names.
+    let replace = event.replace.unwrap_or(true);
+
     let mut activity_message = ActivityMessage {
         id: event.message_id.clone(),
         activity_type: event.activity_type.clone(),
@@ -604,37 +746,44 @@ fn apply_activity_snapshot(messages: &mut Vec<Message>, event: &ActivitySnapshot
         subagent_run_id: event.attributable.subagent_run_id.clone(),
         metadata: None,
     };
-    // Metadata is folded into the merge target *after* resolution, so a
-    // replace keeps the accumulated keys and adds the event's on top
-    // (upstream merges into `mergeTarget`, `apply/default.ts:905`).
-    merge_event_metadata(&mut activity_message.metadata, event.base.metadata.as_ref());
-
-    // Absent `replace` means replace: the snapshot is the authoritative
-    // content for the activity it names.
-    let replace = event.replace.unwrap_or(true);
 
     if let Some(index) = messages
         .iter()
         .position(|message| message.id() == event.message_id)
     {
-        match &messages[index] {
-            Message::Activity(existing) if replace => {
-                // The upstream replace spreads the existing message
-                // (`apply/default.ts:882-884`): *"Spread carries the accumulated
-                // metadata across the replace — a snapshot replaces content, not
-                // the metadata built up so far."* Attribution is the exception
-                // upstream re-mints and we re-take it above.
-                activity_message.metadata = existing.metadata.clone();
-                merge_event_metadata(&mut activity_message.metadata, event.base.metadata.as_ref());
-                messages[index] = Message::Activity(activity_message);
+        let is_activity = matches!(messages[index], Message::Activity(_));
+        if is_activity && replace {
+            // The upstream replace spreads the existing message
+            // (`apply/default.ts:882-884`): *"Spread carries the accumulated
+            // metadata across the replace — a snapshot replaces content, not
+            // the metadata built up so far."* Attribution is the exception
+            // upstream re-mints and we re-take it above.
+            activity_message.metadata = message_metadata_mut(&mut messages[index]).clone();
+        }
+        // `mergeTarget` resolves outside the `replace` branch
+        // (`apply/default.ts:878-905`): a non-replace snapshot merges its
+        // metadata into the existing message whose content stands. A
+        // non-activity slot under this id only becomes the snapshot's activity
+        // when `replace` — otherwise the merge target stays undefined and the
+        // event is dropped entirely (`apply/default.ts:890-893`).
+        if is_activity {
+            if !replace {
+                merge_event_metadata(
+                    message_metadata_mut(&mut messages[index]),
+                    event.base.metadata.as_ref(),
+                );
+                return;
             }
-            Message::Activity(_) => {}
-            _ if replace => messages[index] = Message::Activity(activity_message),
-            _ => {}
+            merge_event_metadata(&mut activity_message.metadata, event.base.metadata.as_ref());
+            messages[index] = Message::Activity(activity_message);
+        } else if replace {
+            merge_event_metadata(&mut activity_message.metadata, event.base.metadata.as_ref());
+            messages[index] = Message::Activity(activity_message);
         }
         return;
     }
 
+    merge_event_metadata(&mut activity_message.metadata, event.base.metadata.as_ref());
     messages.push(Message::Activity(activity_message));
 }
 
@@ -721,7 +870,14 @@ fn apply_reasoning_encrypted_value(
                 .iter_mut()
                 .find(|message| message.id() == entity_id)
             {
-                set_message_encrypted_value(message, encrypted_value)?;
+                // Activity messages do not have encryptedValue; the event is
+                // ignored, the run goes on (`apply/default.ts:1443-1447`).
+                if !set_message_encrypted_value(message, encrypted_value) {
+                    tracing::warn!(
+                        entity_id = %entity_id,
+                        "REASONING_ENCRYPTED_VALUE: activity messages do not support encrypted values"
+                    );
+                }
             }
         }
     }
@@ -729,7 +885,10 @@ fn apply_reasoning_encrypted_value(
     Ok(())
 }
 
-fn set_message_encrypted_value(message: &mut Message, encrypted_value: &str) -> Result<()> {
+/// Sets the encrypted value, reporting whether the message kind supports one.
+/// An activity message does not (`apply/default.ts:1443-1447`); the caller
+/// announces that instead of failing the run.
+fn set_message_encrypted_value(message: &mut Message, encrypted_value: &str) -> bool {
     let encrypted_value = Some(encrypted_value.to_string());
 
     match message {
@@ -739,14 +898,10 @@ fn set_message_encrypted_value(message: &mut Message, encrypted_value: &str) -> 
         Message::User(message) => message.encrypted_value = encrypted_value,
         Message::Tool(message) => message.encrypted_value = encrypted_value,
         Message::Reasoning(message) => message.encrypted_value = encrypted_value,
-        Message::Activity(_) => {
-            return Err(AgUiError::validation(
-                "activity messages do not support encrypted values",
-            ));
-        }
+        Message::Activity(_) => return false,
     }
 
-    Ok(())
+    true
 }
 
 fn resolve_or_create_assistant_message(
@@ -1058,7 +1213,13 @@ mod tests {
                     content: serde_json::Map::from_iter([(String::from("step"), json!("drop"))]),
                     attributable: AttributableFields::default(),
                     replace: Some(false),
-                    base: agui_rs_core::BaseEventFields::default(),
+                    base: agui_rs_core::BaseEventFields {
+                        // The merge target exists even without `replace`
+                        // (`apply/default.ts:878-905`), so the event's
+                        // metadata lands on the message whose content stands.
+                        metadata: Some(json!({"usage": {"tokens": 4}})),
+                        ..Default::default()
+                    },
                 }),
             )
             .expect("snapshot should apply");
@@ -1067,6 +1228,11 @@ mod tests {
                 Message::Activity(message) => {
                     assert_eq!(message.activity_type, "plan");
                     assert_eq!(message.content.get("step"), Some(&json!("keep")));
+                    assert_eq!(
+                        message.metadata.as_ref().map(|m| Value::Object(m.clone())),
+                        Some(json!({"usage": {"tokens": 4}})),
+                        "the non-replace snapshot's metadata lands on the existing message"
+                    );
                 }
                 _ => panic!("expected activity message"),
             }
@@ -2945,6 +3111,422 @@ mod tests {
                 }
                 _ => panic!("expected assistant message"),
             }
+        }
+    }
+
+    /// The upstream handlers announce a defect with `console.warn` and return —
+    /// the run continues (`apply/default.ts:284-286 / 291-295 / 336-343 /
+    /// 483-495 / 554-557 / 936-940 / 1444-1447`). Our earlier `?` propagation
+    /// turned each into a run-fatal error that stranded `RUN_FINISHED`.
+    mod warn_not_fatal {
+        use super::*;
+        use agui_rs_core::{
+            ReasoningEncryptedValueEvent, ReasoningMessageContentEvent, ReasoningMessageRole,
+            ReasoningMessageStartEvent, RunFinishedEvent,
+        };
+
+        fn base(metadata: Value) -> agui_rs_core::BaseEventFields {
+            agui_rs_core::BaseEventFields {
+                metadata: Some(metadata),
+                ..Default::default()
+            }
+        }
+
+        fn reasoning_start(message_id: &str, metadata: Value) -> Event {
+            Event::ReasoningMessageStart(ReasoningMessageStartEvent {
+                message_id: message_id.into(),
+                role: ReasoningMessageRole::Reasoning,
+                attributable: AttributableFields::default(),
+                base: base(metadata),
+            })
+        }
+
+        #[tokio::test]
+        async fn text_content_without_start_warns_and_the_run_continues() {
+            // default.ts:284-286: a delta without its START is dropped with a
+            // warning; downstream events — including RUN_FINISHED — still apply.
+            let items = default_apply_events(
+                stream::iter(vec![
+                    Ok(agui_rs_core::factory::text_message_content("m1", "orphan")),
+                    Ok(Event::RunFinished(RunFinishedEvent {
+                        thread_id: "t".into(),
+                        run_id: "r".into(),
+                        result: None,
+                        outcome: None,
+                        usage: Vec::new(),
+                        base: Default::default(),
+                    })),
+                ]),
+                Vec::new(),
+                Value::Null,
+            )
+            .collect::<Vec<_>>()
+            .await
+            .into_iter()
+            .collect::<Result<Vec<_>>>()
+            .expect("the stream survives an orphan delta");
+
+            assert_eq!(items.len(), 2, "both events yielded");
+            assert!(items[0].messages.is_empty());
+        }
+
+        #[tokio::test]
+        async fn content_into_an_activity_message_warns_and_the_run_continues() {
+            // default.ts:291-295: appending a string to an activity message
+            // would invalidate it; warn, leave it alone, keep streaming.
+            let items = default_apply_events(
+                stream::iter(vec![
+                    Ok(Event::ActivitySnapshot(ActivitySnapshotEvent {
+                        message_id: "a1".into(),
+                        activity_type: "plan".into(),
+                        content: serde_json::Map::from_iter([(
+                            String::from("tasks"),
+                            json!(["plan"]),
+                        )]),
+                        attributable: AttributableFields::default(),
+                        replace: Some(true),
+                        base: base(json!({"origin": "activity"})),
+                    })),
+                    Ok(agui_rs_core::factory::text_message_content("a1", "Hello")),
+                    Ok(Event::RunFinished(RunFinishedEvent {
+                        thread_id: "t".into(),
+                        run_id: "r".into(),
+                        result: None,
+                        outcome: None,
+                        usage: Vec::new(),
+                        base: Default::default(),
+                    })),
+                ]),
+                Vec::new(),
+                Value::Null,
+            )
+            .collect::<Vec<_>>()
+            .await
+            .into_iter()
+            .collect::<Result<Vec<_>>>()
+            .expect("the stream survives content aimed at an activity message");
+
+            let last = items.last().expect("final event");
+            let [message] = &last.messages[..] else {
+                panic!("expected exactly one message, got {:?}", last.messages);
+            };
+            let Message::Activity(activity) = message else {
+                panic!("expected activity message, got {message:?}");
+            };
+            // The structured content stands and the activity's own metadata
+            // stays off the text event's.
+            assert_eq!(activity.content.get("tasks"), Some(&json!(["plan"])));
+            assert_eq!(
+                activity.metadata.as_ref().map(|m| Value::Object(m.clone())),
+                Some(json!({"origin": "activity"}))
+            );
+        }
+
+        #[tokio::test]
+        async fn tool_call_args_for_unknown_id_warn_and_the_run_continues() {
+            // default.ts:492-495.
+            let state = apply_all(vec![
+                agui_rs_core::factory::tool_call_args("tc-ghost", "{\"q\":1}"),
+                agui_rs_core::factory::tool_call_end("tc-ghost"),
+            ]);
+            assert!(state.messages.is_empty());
+        }
+
+        #[tokio::test]
+        async fn text_start_reusing_an_activity_id_is_dropped_and_content_skipped() {
+            // S8 — default.ts:236-246: the start is warned away, and the
+            // following CONTENT then hits the activity guard at 291-295, so
+            // the activity stands untouched and the stream lives.
+            let items = default_apply_events(
+                stream::iter(vec![
+                    Ok(Event::ActivitySnapshot(ActivitySnapshotEvent {
+                        message_id: "a1".into(),
+                        activity_type: "plan".into(),
+                        content: serde_json::Map::from_iter([(
+                            String::from("tasks"),
+                            json!(["plan"]),
+                        )]),
+                        attributable: AttributableFields::default(),
+                        replace: Some(true),
+                        base: base(json!({"origin": "activity"})),
+                    })),
+                    Ok(Event::TextMessageStart(
+                        agui_rs_core::TextMessageStartEvent {
+                            message_id: "a1".into(),
+                            role: TextMessageRole::Assistant,
+                            attributable: AttributableFields::default(),
+                            name: None,
+                            base: base(json!({"origin": "text"})),
+                        },
+                    )),
+                    Ok(agui_rs_core::factory::text_message_content("a1", "leak")),
+                    Ok(Event::RunFinished(RunFinishedEvent {
+                        thread_id: "t".into(),
+                        run_id: "r".into(),
+                        result: None,
+                        outcome: None,
+                        usage: Vec::new(),
+                        base: Default::default(),
+                    })),
+                ]),
+                Vec::new(),
+                Value::Null,
+            )
+            .collect::<Vec<_>>()
+            .await
+            .into_iter()
+            .collect::<Result<Vec<_>>>()
+            .expect("the stream survives a reused activity id");
+
+            assert_eq!(items.len(), 4, "every event yields");
+            let last = items.last().expect("final event");
+            let [message] = &last.messages[..] else {
+                panic!("expected exactly one message, got {:?}", last.messages);
+            };
+            let Message::Activity(activity) = message else {
+                panic!("expected the activity message, got {message:?}");
+            };
+            assert_eq!(activity.content.get("tasks"), Some(&json!(["plan"])));
+            assert_eq!(
+                activity.metadata.as_ref().map(|m| Value::Object(m.clone())),
+                Some(json!({"origin": "activity"})),
+                "neither text event's metadata lands on the activity"
+            );
+        }
+
+        #[tokio::test]
+        async fn content_after_a_messages_snapshot_flush_warns_and_the_run_continues() {
+            // A MESSAGES_SNAPSHOT without the streamed message flushes it; the
+            // next CONTENT for its id finds nothing and is dropped with a
+            // warning (default.ts:284-286), not fatal.
+            let items = default_apply_events(
+                stream::iter(vec![
+                    Ok(Event::TextMessageStart(
+                        agui_rs_core::TextMessageStartEvent {
+                            message_id: "m1".into(),
+                            role: TextMessageRole::Assistant,
+                            attributable: AttributableFields::default(),
+                            name: None,
+                            base: Default::default(),
+                        },
+                    )),
+                    Ok(Event::MessagesSnapshot(MessagesSnapshotEvent {
+                        messages: vec![],
+                        base: Default::default(),
+                    })),
+                    Ok(agui_rs_core::factory::text_message_content("m1", "lost")),
+                    Ok(Event::RunFinished(RunFinishedEvent {
+                        thread_id: "t".into(),
+                        run_id: "r".into(),
+                        result: None,
+                        outcome: None,
+                        usage: Vec::new(),
+                        base: Default::default(),
+                    })),
+                ]),
+                Vec::new(),
+                Value::Null,
+            )
+            .collect::<Vec<_>>()
+            .await
+            .into_iter()
+            .collect::<Result<Vec<_>>>()
+            .expect("the stream survives content after a snapshot flush");
+
+            let last = items.last().expect("final event");
+            assert!(last.messages.is_empty());
+        }
+
+        #[tokio::test]
+        async fn encrypted_value_on_an_activity_message_warns_and_the_run_continues() {
+            // default.ts:1443-1447: activity messages do not carry
+            // encryptedValue; the event is ignored, the run goes on.
+            let state = apply_all(vec![
+                Event::ActivitySnapshot(ActivitySnapshotEvent {
+                    message_id: "a1".into(),
+                    activity_type: "plan".into(),
+                    content: serde_json::Map::new(),
+                    attributable: AttributableFields::default(),
+                    replace: Some(true),
+                    base: Default::default(),
+                }),
+                Event::ReasoningEncryptedValue(ReasoningEncryptedValueEvent {
+                    subtype: ReasoningEncryptedValueSubtype::Message,
+                    entity_id: "a1".into(),
+                    encrypted_value: "cipher".into(),
+                    attributable: AttributableFields::default(),
+                    base: Default::default(),
+                }),
+                Event::RunStarted(RunStartedEvent {
+                    thread_id: "t".into(),
+                    run_id: "r".into(),
+                    protocol_version: None,
+                    parent_run_id: None,
+                    input: None,
+                    base: Default::default(),
+                }),
+            ]);
+
+            let [message] = &state.messages[..] else {
+                panic!("expected one message");
+            };
+            // ActivityMessage carries no encrypted_value at all — the entity is
+            // untouched either way.
+            let Message::Activity(_) = message else {
+                panic!("expected activity message, got {message:?}");
+            };
+        }
+
+        #[tokio::test]
+        async fn reasoning_content_for_activity_id_warns_and_the_run_continues() {
+            // default.ts:1292-1298: same collision as the text handlers.
+            let state = apply_all(vec![
+                Event::ActivitySnapshot(ActivitySnapshotEvent {
+                    message_id: "shared".into(),
+                    activity_type: "plan".into(),
+                    content: serde_json::Map::from_iter([(String::from("tasks"), json!(["plan"]))]),
+                    attributable: AttributableFields::default(),
+                    replace: Some(true),
+                    base: Default::default(),
+                }),
+                Event::ReasoningMessageContent(ReasoningMessageContentEvent {
+                    message_id: "shared".into(),
+                    delta: "thinking".into(),
+                    attributable: AttributableFields::default(),
+                    base: Default::default(),
+                }),
+            ]);
+
+            let [message] = &state.messages[..] else {
+                panic!("expected one message");
+            };
+            let Message::Activity(activity) = message else {
+                panic!("expected activity message, got {message:?}");
+            };
+            assert_eq!(activity.content.get("tasks"), Some(&json!(["plan"])));
+        }
+
+        #[tokio::test]
+        async fn start_for_activity_id_warns_and_drops_the_event() {
+            // default.ts:1253-1262 (reasoning) and 236-246 (text): an id an
+            // activity message holds means the producer reused it — warn, leave
+            // the activity alone, drop the event and its metadata.
+            let state = apply_all(vec![
+                Event::ActivitySnapshot(ActivitySnapshotEvent {
+                    message_id: "shared".into(),
+                    activity_type: "plan".into(),
+                    content: serde_json::Map::new(),
+                    attributable: AttributableFields::default(),
+                    replace: Some(true),
+                    base: base(json!({"origin": "activity"})),
+                }),
+                reasoning_start("shared", json!({"origin": "reasoning"})),
+            ]);
+
+            let [message] = &state.messages[..] else {
+                panic!("expected one message");
+            };
+            let Message::Activity(activity) = message else {
+                panic!("expected activity message, got {message:?}");
+            };
+            assert_eq!(
+                activity.metadata.as_ref().map(|m| Value::Object(m.clone())),
+                Some(json!({"origin": "activity"})),
+                "the reasoning event's metadata does not land on the activity"
+            );
+        }
+    }
+
+    mod run_started_input {
+        use super::*;
+        use agui_rs_core::RunAgentInput;
+
+        fn user_message(id: &str, content: &str) -> Message {
+            Message::User(UserMessage {
+                id: id.into(),
+                metadata: None,
+                subagent_run_id: None,
+                content: UserMessageContent::Text(content.into()),
+                name: None,
+                encrypted_value: None,
+            })
+        }
+
+        fn run_started(messages: Vec<Message>) -> Event {
+            Event::RunStarted(RunStartedEvent {
+                thread_id: "t".into(),
+                run_id: "r".into(),
+                protocol_version: None,
+                parent_run_id: None,
+                input: Some(RunAgentInput {
+                    thread_id: "t".into(),
+                    run_id: "r".into(),
+                    protocol_version: None,
+                    parent_run_id: None,
+                    state: None,
+                    messages,
+                    tools: Vec::new(),
+                    context: Vec::new(),
+                    forwarded_props: None,
+                    resume: None,
+                }),
+                base: Default::default(),
+            })
+        }
+
+        /// run-started-input.test.ts:29-66: messages carried in
+        /// `RUN_STARTED.input.messages` join the transcript.
+        #[test]
+        fn adds_messages_not_already_present() {
+            let state = apply_all(vec![run_started(vec![
+                user_message("msg-1", "Hello"),
+                user_message("msg-2", "How are you?"),
+            ])]);
+
+            let ids: Vec<&str> = state.messages.iter().map(|m| m.id()).collect();
+            assert_eq!(ids, vec!["msg-1", "msg-2"]);
+        }
+
+        /// run-started-input.test.ts:68-141: already-present ids are kept as
+        /// they are; only new ids join.
+        #[test]
+        fn does_not_duplicate_existing_ids() {
+            let mut state = ApplyState {
+                messages: vec![user_message("msg-1", "Existing")],
+                state: Value::Null,
+            };
+            apply_event(
+                &mut state,
+                &run_started(vec![
+                    user_message("msg-1", "Duplicate (ignored)"),
+                    user_message("msg-2", "New"),
+                ]),
+            )
+            .unwrap();
+
+            let ids: Vec<&str> = state.messages.iter().map(|m| m.id()).collect();
+            assert_eq!(ids, vec!["msg-1", "msg-2"]);
+            match &state.messages[0] {
+                Message::User(user) => match &user.content {
+                    UserMessageContent::Text(text) => assert_eq!(text, "Existing"),
+                    other => panic!("expected text content, got {other:?}"),
+                },
+                other => panic!("expected user message, got {other:?}"),
+            }
+        }
+
+        /// run-started-input.test.ts:144-171: no input, no projection.
+        #[test]
+        fn without_input_is_a_noop() {
+            let state = apply_all(vec![Event::RunStarted(RunStartedEvent {
+                thread_id: "t".into(),
+                run_id: "r".into(),
+                protocol_version: None,
+                parent_run_id: None,
+                input: None,
+                base: Default::default(),
+            })]);
+            assert!(state.messages.is_empty());
         }
     }
 }
