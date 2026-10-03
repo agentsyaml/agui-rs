@@ -1,4 +1,6 @@
-use agui_rs_core::{AgUiError, Event, ReasoningEncryptedValueSubtype, SubagentStartedEvent};
+use agui_rs_core::{
+    AgUiError, Event, Message, ReasoningEncryptedValueSubtype, SubagentStartedEvent,
+};
 use async_stream::stream;
 use futures::{Stream, StreamExt};
 use std::collections::{HashMap, HashSet};
@@ -31,9 +33,15 @@ struct VerifierState {
     first_event_received: bool,
     run_started: bool,
     run_finished: bool,
-    active_text_message_id: Option<String>,
-    active_tool_call_id: Option<String>,
-    active_tool_call_parent_message_id: Option<String>,
+    /// Open text message ids (upstream `activeMessages` Set,
+    /// `verify/verify.ts:15`). A SET, not a slot: distinct messages stream
+    /// concurrently and may END out of order (upstream
+    /// `verify/__tests__/verify.concurrent.test.ts:23-96`).
+    active_text_messages: HashSet<String>,
+    /// Open tool call ids keyed by id, valued by the `parent_message_id` the
+    /// START named (upstream `activeToolCalls` Set plus the per-call parent the
+    /// CHUNK continuation must match). Concurrency applies here too.
+    active_tool_calls: HashMap<String, Option<String>>,
     // Reasoning has TWO bracketed entities, not one. A SPAN is opened by
     // REASONING_START and closed by REASONING_END; a reasoning MESSAGE is
     // opened by REASONING_MESSAGE_START and closed by REASONING_MESSAGE_END
@@ -90,11 +98,12 @@ where
 
 impl VerifierState {
     /// Resets per-run state so a new `RUN_STARTED` can begin a fresh run after a
-    /// previous `RUN_FINISHED`. Mirrors `resetRunState()` in the TypeScript
-    /// `verifyEvents`. Note: `run_errored` is intentionally NOT reset — once a
-    /// run errors, the whole stream is permanently terminal.
+    /// previous `RUN_FINISHED` **or `RUN_ERROR`**. Mirrors `resetRunState()` in
+    /// the TypeScript `verifyEvents` (`verify/verify.ts:106-121`), which clears
+    /// `runError` too — a new run is not still dead.
     fn reset_run_state(&mut self) {
         self.run_finished = false;
+        self.run_errored = false;
         self.run_started = true;
         self.clear_active_state();
     }
@@ -131,9 +140,11 @@ impl VerifierState {
     }
 
     fn validate_event(&mut self, event: &Event) -> VerifyResult<()> {
-        // RUN_ERROR is permanently terminal: nothing (not even a new run) may
-        // follow it.
-        if self.run_errored {
+        // RUN_ERROR is terminal until a new RUN_STARTED opens the next run: a
+        // stream can carry more than one run (a replay of a stored thread being
+        // the common case), and a run that errored is over rather than active
+        // (upstream `verify/verify.ts:222-226`).
+        if self.run_errored && !matches!(event, Event::RunStarted(_)) {
             return Err(AgUiError::validation(format!(
                 "Cannot send event type '{}': The run has already errored with 'RUN_ERROR'. No further events can be sent.",
                 event_name(event)
@@ -159,21 +170,38 @@ impl VerifierState {
             }
         } else if matches!(event, Event::RunStarted(_)) {
             // A RUN_STARTED mid-stream is only valid as the start of a new run
-            // after the previous one finished.
-            if self.run_started && !self.run_finished {
+            // after the previous one finished — OR after it errored, which is
+            // over rather than active (upstream
+            // `verify/verify.ts:255-261`: `runStarted && !runFinished &&
+            // !runError`).
+            if self.run_started && !self.run_finished && !self.run_errored {
                 return Err(AgUiError::validation(
                     "Cannot send 'RUN_STARTED' while a run is still active. The previous run must be finished with 'RUN_FINISHED' before starting a new run.",
                 ));
             }
-            if self.run_finished {
+            if self.run_finished || self.run_errored {
                 self.reset_run_state();
             }
         }
 
         match event {
-            Event::RunStarted(_) => {
+            Event::RunStarted(raw) => {
                 self.run_started = true;
-                Ok(())
+                // The input echo carries replayed history the reducer applies,
+                // so it seeds ownership non-authoritatively (upstream
+                // `verify/verify.ts:922-936`).
+                let messages = raw
+                    .input
+                    .as_ref()
+                    .map(|input| input.messages.as_slice())
+                    .unwrap_or(&[]);
+                self.seed_owners_from_messages(messages, false)
+            }
+            Event::MessagesSnapshot(event) => {
+                // Authoritative: the snapshot restates the conversation and the
+                // reducer replaces each message, so its owners replace recorded
+                // ones (upstream `verify/verify.ts:906-920`).
+                self.seed_owners_from_messages(&event.messages, true)
             }
             Event::RunFinished(_) => self.finish_run(),
             Event::RunError(_) => {
@@ -321,9 +349,16 @@ impl VerifierState {
             )));
         }
 
-        if let Some(message_id) = self.active_text_message_id.as_deref() {
+        if !self.active_text_messages.is_empty() {
+            let mut open = self
+                .active_text_messages
+                .iter()
+                .cloned()
+                .collect::<Vec<_>>();
+            open.sort();
             return Err(AgUiError::validation(format!(
-                "Cannot send 'RUN_FINISHED' while text messages are still active: {message_id}"
+                "Cannot send 'RUN_FINISHED' while text messages are still active: {}",
+                open.join(", ")
             )));
         }
 
@@ -353,9 +388,12 @@ impl VerifierState {
             )));
         }
 
-        if let Some(tool_call_id) = self.active_tool_call_id.as_deref() {
+        if !self.active_tool_calls.is_empty() {
+            let mut open = self.active_tool_calls.keys().cloned().collect::<Vec<_>>();
+            open.sort();
             return Err(AgUiError::validation(format!(
-                "Cannot send 'RUN_FINISHED' while tool calls are still active: {tool_call_id}"
+                "Cannot send 'RUN_FINISHED' while tool calls are still active: {}",
+                open.join(", ")
             )));
         }
 
@@ -375,10 +413,13 @@ impl VerifierState {
     }
 
     fn start_text_message(&mut self, message_id: &str, tag: Option<&str>) -> VerifyResult<()> {
-        if let Some(active) = self.active_text_message_id.as_deref() {
+        // Membership check on the OPEN set only; the owner check below is
+        // separate and reads the retained owner map (upstream
+        // `verify/verify.ts:378-408`). The old slot model reported the OTHER
+        // active id here; upstream reports the id that was SENT.
+        if self.active_text_messages.contains(message_id) {
             return Err(AgUiError::validation(format!(
-                "Cannot send 'TEXT_MESSAGE_START' event: A text message with ID '{}' is already in progress. Complete it with 'TEXT_MESSAGE_END' first.",
-                active
+                "Cannot send 'TEXT_MESSAGE_START' event: A text message with ID '{message_id}' is already in progress. Complete it with 'TEXT_MESSAGE_END' first."
             )));
         }
 
@@ -403,64 +444,55 @@ impl VerifierState {
             );
         }
 
-        self.active_text_message_id = Some(message_id.to_owned());
+        self.active_text_messages.insert(message_id.to_owned());
         Ok(())
     }
 
     fn text_message_content(&self, message_id: &str, tag: Option<&str>) -> VerifyResult<()> {
-        match self.active_text_message_id.as_deref() {
-            Some(active) if active == message_id => {
-                Self::subagent_tag_error(
-                    "TEXT_MESSAGE_CONTENT",
-                    tag,
-                    self.owners.message.get(message_id),
-                    "message",
-                    message_id,
-                )
-            }
-            _ => Err(AgUiError::validation(format!(
+        if !self.active_text_messages.contains(message_id) {
+            return Err(AgUiError::validation(format!(
                 "Cannot send 'TEXT_MESSAGE_CONTENT' event: No active text message found with ID '{}'. Start a text message with 'TEXT_MESSAGE_START' first.",
                 message_id
-            ))),
+            )));
         }
+        Self::subagent_tag_error(
+            "TEXT_MESSAGE_CONTENT",
+            tag,
+            self.owners.message.get(message_id),
+            "message",
+            message_id,
+        )
     }
 
     fn text_message_chunk(&self, message_id: Option<&str>) -> VerifyResult<()> {
-        match (self.active_text_message_id.as_deref(), message_id) {
-            (Some(active), Some(message_id)) if active == message_id => Ok(()),
-            (Some(_), None) => Ok(()),
-            (Some(active), Some(_)) => Err(AgUiError::validation(format!(
-                "Cannot send 'TEXT_MESSAGE_CHUNK' event: The active text message ID is '{}'.",
-                active
-            ))),
-            (_, Some(message_id)) => Err(AgUiError::validation(format!(
+        match message_id {
+            Some(message_id) if self.active_text_messages.contains(message_id) => Ok(()),
+            Some(_) => Err(AgUiError::validation(format!(
                 "Cannot send 'TEXT_MESSAGE_CHUNK' event: No active text message found with ID '{}'. Start a text message with 'TEXT_MESSAGE_START' first.",
-                message_id
+                message_id.unwrap_or("")
             ))),
-            (None, None) => Err(AgUiError::validation(
+            None => Err(AgUiError::validation(
                 "Cannot send 'TEXT_MESSAGE_CHUNK' event: No active text message found. Start a text message with 'TEXT_MESSAGE_START' first.",
             )),
         }
     }
 
     fn end_text_message(&mut self, message_id: &str, tag: Option<&str>) -> VerifyResult<()> {
-        match self.active_text_message_id.as_deref() {
-            Some(active) if active == message_id => {
-                Self::subagent_tag_error(
-                    "TEXT_MESSAGE_END",
-                    tag,
-                    self.owners.message.get(message_id),
-                    "message",
-                    message_id,
-                )?;
-                self.active_text_message_id = None;
-                Ok(())
-            }
-            _ => Err(AgUiError::validation(format!(
+        if !self.active_text_messages.contains(message_id) {
+            return Err(AgUiError::validation(format!(
                 "Cannot send 'TEXT_MESSAGE_END' event: No active text message found with ID '{}'. A 'TEXT_MESSAGE_START' event must be sent first.",
                 message_id
-            ))),
+            )));
         }
+        Self::subagent_tag_error(
+            "TEXT_MESSAGE_END",
+            tag,
+            self.owners.message.get(message_id),
+            "message",
+            message_id,
+        )?;
+        self.active_text_messages.remove(message_id);
+        Ok(())
     }
 
     fn start_tool_call(
@@ -469,24 +501,28 @@ impl VerifierState {
         parent_message_id: Option<&str>,
         tag: Option<&str>,
     ) -> VerifyResult<()> {
-        if let Some(active) = self.active_tool_call_id.as_deref() {
+        if self.active_tool_calls.contains_key(tool_call_id) {
             return Err(AgUiError::validation(format!(
-                "Cannot send 'TOOL_CALL_START' event: A tool call with ID '{}' is already in progress. Complete it with 'TOOL_CALL_END' first.",
-                active
+                "Cannot send 'TOOL_CALL_START' event: A tool call with ID '{tool_call_id}' is already in progress. Complete it with 'TOOL_CALL_END' first."
             )));
         }
 
-        // The parent must name a message the verifier knows: the ACTIVE one, or a
-        // closed one whose owner the run still retains. Upstream only consults the
-        // retained owner map here (`verify/verify.ts:476-492`) — its own test nests
-        // a tool call in an already-ended message (`subagent-verify.test.ts:1614-1636`)
-        // — so requiring liveness rejected conforming streams. An unknown id is still
-        // rejected to keep the port's stricter base-suite behavior.
+        // Check parent BEFORE any state change: a rejected start must leave no
+        // dirty entry behind.
+        let parent_owner = parent_message_id.and_then(|m| self.owners.message.get(m).cloned());
         if let Some(parent_message_id) = parent_message_id {
-            let known = self.active_text_message_id.as_deref() == Some(parent_message_id)
+            // The parent must name a message the verifier knows: an open one,
+            // or a closed one whose owner the run still retains. Upstream only
+            // consults the retained owner map here
+            // (`verify/verify.ts:476-492`) — its own test nests a tool call in
+            // an already-ended message
+            // (`subagent-verify.test.ts:1614-1636`) — so requiring liveness
+            // rejected conforming streams. An unknown id is still rejected to
+            // keep the port's stricter base-suite behavior.
+            let known = self.active_text_messages.contains(parent_message_id)
                 || self.owners.message.contains_key(parent_message_id);
             if !known {
-                return Err(match self.active_text_message_id.as_deref() {
+                return Err(match self.active_text_messages.iter().next() {
                     Some(active) => AgUiError::validation(format!(
                         "Cannot send 'TOOL_CALL_START' event: Parent message ID '{}' must match the active text message ID '{}'.",
                         parent_message_id, active
@@ -504,7 +540,6 @@ impl VerifierState {
         // whose explicit tag disagrees with that message's owner is rejected
         // rather than silently reattributed; an untagged call inherits the
         // parent message's owner (upstream `verify/verify.ts:468-492`).
-        let parent_owner = parent_message_id.and_then(|m| self.owners.message.get(m).cloned());
         if let Some(parent_owner) = &parent_owner {
             if let Some(tag) = tag {
                 if parent_owner.subagent_run_id.as_deref() != Some(tag) {
@@ -553,33 +588,34 @@ impl VerifierState {
                 )));
             }
         }
+
+        // All checks passed — now mutate.
         if existing_owner.is_none() {
             self.owners
                 .tool_call
                 .insert(tool_call_id.to_owned(), inherited_owner);
         }
-
-        self.active_tool_call_id = Some(tool_call_id.to_owned());
-        self.active_tool_call_parent_message_id = parent_message_id.map(ToOwned::to_owned);
+        self.active_tool_calls.insert(
+            tool_call_id.to_owned(),
+            parent_message_id.map(ToOwned::to_owned),
+        );
         Ok(())
     }
 
     fn tool_call_args(&self, tool_call_id: &str, tag: Option<&str>) -> VerifyResult<()> {
-        match self.active_tool_call_id.as_deref() {
-            Some(active) if active == tool_call_id => {
-                Self::subagent_tag_error(
-                    "TOOL_CALL_ARGS",
-                    tag,
-                    self.owners.tool_call.get(tool_call_id),
-                    "tool call",
-                    tool_call_id,
-                )
-            }
-            _ => Err(AgUiError::validation(format!(
+        if !self.active_tool_calls.contains_key(tool_call_id) {
+            return Err(AgUiError::validation(format!(
                 "Cannot send 'TOOL_CALL_ARGS' event: No active tool call found with ID '{}'. Start a tool call with 'TOOL_CALL_START' first.",
                 tool_call_id
-            ))),
+            )));
         }
+        Self::subagent_tag_error(
+            "TOOL_CALL_ARGS",
+            tag,
+            self.owners.tool_call.get(tool_call_id),
+            "tool call",
+            tool_call_id,
+        )
     }
 
     fn tool_call_chunk(
@@ -587,29 +623,20 @@ impl VerifierState {
         tool_call_id: Option<&str>,
         parent_message_id: Option<&str>,
     ) -> VerifyResult<()> {
-        match (self.active_tool_call_id.as_deref(), tool_call_id) {
-            (Some(active), Some(tool_call_id)) if active != tool_call_id => {
-                return Err(AgUiError::validation(format!(
-                    "Cannot send 'TOOL_CALL_CHUNK' event: No active tool call found with ID '{}'. Start a tool call with 'TOOL_CALL_START' first.",
-                    tool_call_id
-                )));
-            }
-            (None, Some(tool_call_id)) => {
-                return Err(AgUiError::validation(format!(
-                    "Cannot send 'TOOL_CALL_CHUNK' event: No active tool call found with ID '{}'. Start a tool call with 'TOOL_CALL_START' first.",
-                    tool_call_id
-                )));
-            }
-            (None, None) => {
-                return Err(AgUiError::validation(
-                    "Cannot send 'TOOL_CALL_CHUNK' event: No active tool call found. Start a tool call with 'TOOL_CALL_START' first.",
-                ));
-            }
-            _ => {}
-        }
+        let Some(tool_call_id) = tool_call_id else {
+            return Err(AgUiError::validation(
+                "Cannot send 'TOOL_CALL_CHUNK' event: No active tool call found. Start a tool call with 'TOOL_CALL_START' first.",
+            ));
+        };
+        let Some(active_parent) = self.active_tool_calls.get(tool_call_id) else {
+            return Err(AgUiError::validation(format!(
+                "Cannot send 'TOOL_CALL_CHUNK' event: No active tool call found with ID '{}'. Start a tool call with 'TOOL_CALL_START' first.",
+                tool_call_id
+            )));
+        };
 
         if let Some(parent_message_id) = parent_message_id {
-            match self.active_tool_call_parent_message_id.as_deref() {
+            match active_parent {
                 Some(active) if active == parent_message_id => {}
                 Some(active) => {
                     return Err(AgUiError::validation(format!(
@@ -630,47 +657,50 @@ impl VerifierState {
     }
 
     fn end_tool_call(&mut self, tool_call_id: &str, tag: Option<&str>) -> VerifyResult<()> {
-        match self.active_tool_call_id.as_deref() {
-            Some(active) if active == tool_call_id => {
-                Self::subagent_tag_error(
-                    "TOOL_CALL_END",
-                    tag,
-                    self.owners.tool_call.get(tool_call_id),
-                    "tool call",
-                    tool_call_id,
-                )?;
-                self.active_tool_call_id = None;
-                self.active_tool_call_parent_message_id = None;
-                Ok(())
-            }
-            _ => Err(AgUiError::validation(format!(
+        if !self.active_tool_calls.contains_key(tool_call_id) {
+            return Err(AgUiError::validation(format!(
                 "Cannot send 'TOOL_CALL_END' event: No active tool call found with ID '{}'. A 'TOOL_CALL_START' event must be sent first.",
                 tool_call_id
-            ))),
+            )));
         }
+        Self::subagent_tag_error(
+            "TOOL_CALL_END",
+            tag,
+            self.owners.tool_call.get(tool_call_id),
+            "tool call",
+            tool_call_id,
+        )?;
+        self.active_tool_calls.remove(tool_call_id);
+        Ok(())
     }
 
     /// Opens a reasoning SPAN. Checked against the opener's OWN set: a span
     /// and the message inside it may share an id, so one set for both would
     /// reject the canonical shape (upstream `verify/verify.ts:689-732`).
     fn start_reasoning(&mut self, message_id: &str, tag: Option<&str>) -> VerifyResult<()> {
-        if !self.active_reasoning_spans.insert(message_id.to_owned()) {
+        // Open-check AND owner check before any mutation: a rejected start
+        // must leave no dirty entry behind.
+        if self.active_reasoning_spans.contains(message_id) {
             return Err(AgUiError::validation(format!(
                 "Cannot send 'REASONING_START' event: A reasoning span with ID '{message_id}' is already in progress. Complete it with 'REASONING_END' first."
             )));
         }
-        self.record_reasoning_owner("REASONING_START", message_id, tag)
+        self.record_reasoning_owner("REASONING_START", message_id, tag)?;
+        self.active_reasoning_spans.insert(message_id.to_owned());
+        Ok(())
     }
 
     /// Opens a reasoning MESSAGE. It requires no enclosing span — the span's
     /// identifier "namespaces nothing" — so only a duplicate open is rejected.
     fn start_reasoning_message(&mut self, message_id: &str, tag: Option<&str>) -> VerifyResult<()> {
-        if !self.active_reasoning_messages.insert(message_id.to_owned()) {
+        if self.active_reasoning_messages.contains(message_id) {
             return Err(AgUiError::validation(format!(
                 "Cannot send 'REASONING_MESSAGE_START' event: A reasoning message with ID '{message_id}' is already in progress. Complete it with 'REASONING_MESSAGE_END' first."
             )));
         }
-        self.record_reasoning_owner("REASONING_MESSAGE_START", message_id, tag)
+        self.record_reasoning_owner("REASONING_MESSAGE_START", message_id, tag)?;
+        self.active_reasoning_messages.insert(message_id.to_owned());
+        Ok(())
     }
 
     /// First writer records the owner; the owner outlives the close, so a
@@ -727,7 +757,7 @@ impl VerifierState {
     }
 
     fn end_reasoning_message(&mut self, message_id: &str, tag: Option<&str>) -> VerifyResult<()> {
-        if !self.active_reasoning_messages.remove(message_id) {
+        if !self.active_reasoning_messages.contains(message_id) {
             return Err(AgUiError::validation(format!(
                 "Cannot send 'REASONING_MESSAGE_END' event: No active reasoning message found with ID '{message_id}'. A 'REASONING_MESSAGE_START' event must be sent first."
             )));
@@ -738,14 +768,16 @@ impl VerifierState {
             self.owners.reasoning.get(message_id),
             "reasoning message",
             message_id,
-        )
+        )?;
+        self.active_reasoning_messages.remove(message_id);
+        Ok(())
     }
 
     /// Closes a reasoning SPAN, independently of any message it bracketed: a
     /// span may end while its message is still open, and the message's own
     /// `REASONING_MESSAGE_END` remains owed (upstream `verify/verify.ts:733-771`).
     fn end_reasoning(&mut self, message_id: &str, tag: Option<&str>) -> VerifyResult<()> {
-        if !self.active_reasoning_spans.remove(message_id) {
+        if !self.active_reasoning_spans.contains(message_id) {
             return Err(AgUiError::validation(format!(
                 "Cannot send 'REASONING_END' event: No active reasoning span found with ID '{message_id}'. A 'REASONING_START' event must be sent first."
             )));
@@ -756,7 +788,9 @@ impl VerifierState {
             self.owners.reasoning.get(message_id),
             "reasoning message",
             message_id,
-        )
+        )?;
+        self.active_reasoning_spans.remove(message_id);
+        Ok(())
     }
 
     /// A chunk is a continuation like content, so it must name an open message.
@@ -914,9 +948,8 @@ impl VerifierState {
     }
 
     fn clear_active_state(&mut self) {
-        self.active_text_message_id = None;
-        self.active_tool_call_id = None;
-        self.active_tool_call_parent_message_id = None;
+        self.active_text_messages.clear();
+        self.active_tool_calls.clear();
         self.active_reasoning_spans.clear();
         self.active_reasoning_messages.clear();
         self.active_step_names.clear();
@@ -926,6 +959,87 @@ impl VerifierState {
         self.active_subagents.clear();
         self.closed_subagents.clear();
         self.owners = Owners::default();
+    }
+
+    /// Ownership seeded from replayed history: `MESSAGES_SNAPSHOT` and the
+    /// `RUN_STARTED` input echo both put messages on the wire that later events
+    /// can reference, so their owners (absent = the parent agent) go on record
+    /// like an opener's would — and each message's tool calls inherit the
+    /// message's owner, since a ToolCall carries no owner field of its own
+    /// (upstream `seedOwnersFromMessages`, `verify/verify.ts:143-184`).
+    ///
+    /// `authoritative` distinguishes the two sources: a snapshot restates the
+    /// whole conversation and the reducer REPLACES the message, so its owner
+    /// replaces the recorded one (`verify/verify.ts:906-920`); the `RUN_STARTED`
+    /// input echo is plain history and seeds only ids nothing else has claimed
+    /// (`verify/verify.ts:922-936`).
+    fn seed_owners_from_messages(
+        &mut self,
+        messages: &[Message],
+        authoritative: bool,
+    ) -> VerifyResult<()> {
+        for message in messages {
+            // Owners are per entity KIND, so the message must seed the bucket
+            // its role streams through (upstream `verify/verify.ts:164-170`).
+            let subagent_run_id = match message {
+                Message::Reasoning(m) => {
+                    let owner = Owner {
+                        subagent_run_id: m.subagent_run_id.clone(),
+                    };
+                    if authoritative || !self.owners.reasoning.contains_key(&m.id) {
+                        self.owners.reasoning.insert(m.id.clone(), owner);
+                    }
+                    m.subagent_run_id.clone()
+                }
+                Message::Activity(m) => {
+                    let owner = Owner {
+                        subagent_run_id: m.subagent_run_id.clone(),
+                    };
+                    if authoritative || !self.owners.activity.contains_key(&m.id) {
+                        self.owners.activity.insert(m.id.clone(), owner);
+                    }
+                    m.subagent_run_id.clone()
+                }
+                _ => {
+                    let subagent_run_id = match message {
+                        Message::Developer(m) => m.subagent_run_id.clone(),
+                        Message::System(m) => m.subagent_run_id.clone(),
+                        Message::Assistant(m) => m.subagent_run_id.clone(),
+                        Message::User(m) => m.subagent_run_id.clone(),
+                        Message::Tool(m) => m.subagent_run_id.clone(),
+                        Message::Reasoning(_) | Message::Activity(_) => unreachable!(),
+                    };
+                    let id = message.id().to_owned();
+                    if authoritative || !self.owners.message.contains_key(&id) {
+                        self.owners.message.insert(
+                            id,
+                            Owner {
+                                subagent_run_id: subagent_run_id.clone(),
+                            },
+                        );
+                    }
+                    subagent_run_id
+                }
+            };
+
+            // toolCalls inherit their message's owner (upstream
+            // `verify/verify.ts:172-176`).
+            if let Message::Assistant(assistant) = message {
+                if let Some(tool_calls) = &assistant.tool_calls {
+                    for tool_call in tool_calls {
+                        if authoritative || !self.owners.tool_call.contains_key(&tool_call.id) {
+                            self.owners.tool_call.insert(
+                                tool_call.id.clone(),
+                                Owner {
+                                    subagent_run_id: subagent_run_id.clone(),
+                                },
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 }
 
@@ -1155,11 +1269,29 @@ mod tests {
         }
 
         #[tokio::test]
-        async fn rejects_second_text_message_start_while_active() {
+        async fn allows_distinct_concurrent_text_messages() {
+            // Upstream `verify/__tests__/verify.concurrent.test.ts:23-96`:
+            // two ids open at once and END out of order all pass.
             let items = collect(vec![
                 factory::run_started("thread", "run"),
                 factory::text_message_start("m1"),
                 factory::text_message_start("m2"),
+                factory::text_message_content("m1", "a"),
+                factory::text_message_content("m2", "b"),
+                factory::text_message_end("m2"),
+                factory::text_message_end("m1"),
+                factory::run_finished("thread", "run"),
+            ])
+            .await;
+            assert!(items.iter().all(VerifyResult::is_ok));
+        }
+
+        #[tokio::test]
+        async fn rejects_duplicate_text_message_start_while_active() {
+            let items = collect(vec![
+                factory::run_started("thread", "run"),
+                factory::text_message_start("m1"),
+                factory::text_message_start("m1"),
             ])
             .await;
             assert_validation(
@@ -1237,11 +1369,28 @@ mod tests {
         }
 
         #[tokio::test]
-        async fn rejects_second_tool_call_start_while_active() {
+        async fn allows_distinct_concurrent_tool_calls() {
+            // Upstream `verify/__tests__/verify.concurrent.test.ts:99-170`.
             let items = collect(vec![
                 factory::run_started("thread", "run"),
                 factory::tool_call_start("tc1", "search"),
-                factory::tool_call_start("tc2", "search"),
+                factory::tool_call_start("tc2", "calculate"),
+                factory::tool_call_args("tc1", "{}"),
+                factory::tool_call_args("tc2", "{}"),
+                factory::tool_call_end("tc2"),
+                factory::tool_call_end("tc1"),
+                factory::run_finished("thread", "run"),
+            ])
+            .await;
+            assert!(items.iter().all(VerifyResult::is_ok));
+        }
+
+        #[tokio::test]
+        async fn rejects_duplicate_tool_call_start_while_active() {
+            let items = collect(vec![
+                factory::run_started("thread", "run"),
+                factory::tool_call_start("tc1", "search"),
+                factory::tool_call_start("tc1", "search"),
             ])
             .await;
             assert_validation(

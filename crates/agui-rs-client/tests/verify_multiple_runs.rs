@@ -209,3 +209,28 @@ async fn handles_complex_scenario_with_multiple_runs_and_various_event_types() {
     assert!(matches!(out[6], Ok(Event::RunStarted(_))));
     assert!(matches!(out[11], Ok(Event::RunFinished(_))));
 }
+
+// Ported from TypeScript `verify/__tests__/verify.multiple-runs.test.ts:414`:
+// "should allow a new RUN_STARTED after RUN_ERROR" — a run that errored is
+// over, not active, so the next run in the same stream is legitimate.
+#[tokio::test]
+async fn allows_a_new_run_started_after_run_error() {
+    let out = collect(vec![
+        factory::run_started("test-thread-1", "test-run-1"),
+        factory::run_error("Agent unreachable"),
+        factory::run_started("test-thread-1", "test-run-2"),
+        factory::text_message_start("msg-1"),
+        factory::text_message_end("msg-1"),
+        factory::run_finished("test-thread-1", "test-run-2"),
+    ])
+    .await;
+
+    assert_eq!(out.len(), 6);
+    assert!(out[..2].iter().all(Result::is_ok));
+    assert!(matches!(out[1], Ok(Event::RunError(_))));
+    assert!(matches!(out[2], Ok(Event::RunStarted(_))));
+    assert!(
+        out[2..].iter().all(Result::is_ok),
+        "the new run after RUN_ERROR should verify: {out:?}"
+    );
+}

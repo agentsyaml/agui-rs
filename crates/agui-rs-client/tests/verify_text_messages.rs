@@ -86,7 +86,9 @@ async fn text_message_end_before_start_errors() {
 }
 
 #[tokio::test]
-async fn second_text_message_start_while_active_errors() {
+async fn duplicate_text_message_start_while_active_errors() {
+    // Upstream `verify/__tests__/verify.concurrent.test.ts:305-346`: only
+    // re-opening the SAME id is rejected; a different id streams concurrently.
     let out = collect(vec![
         factory::run_started("thread", "run"),
         Event::TextMessageStart(TextMessageStartEvent {
@@ -103,6 +105,18 @@ async fn second_text_message_start_while_active_errors() {
             name: None,
             base: BaseEventFields::default(),
         }),
+    ])
+    .await;
+
+    assert!(out.iter().all(Result::is_ok));
+}
+
+#[tokio::test]
+async fn reopening_the_same_text_message_id_while_active_errors() {
+    let out = collect(vec![
+        factory::run_started("thread", "run"),
+        factory::text_message_start("m1"),
+        factory::text_message_start("m1"),
     ])
     .await;
 

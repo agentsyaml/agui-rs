@@ -19,33 +19,44 @@ fn assert_validation(result: &Result<Event>, expected: &str) {
     }
 }
 
+// Ported from TypeScript `verify/__tests__/verify.concurrent.test.ts:23-96`:
+// concurrent text messages with different ids are ALLOWED, including ENDs in a
+// different order than the STARTs.
 #[tokio::test]
-async fn concurrent_text_messages_are_rejected_by_single_active_message_model() {
+async fn concurrent_text_messages_with_different_ids_pass() {
     let out = collect(vec![
         factory::run_started("thread", "run"),
         factory::text_message_start("msg1"),
         factory::text_message_start("msg2"),
+        factory::text_message_content("msg1", "Content for message 1"),
+        factory::text_message_content("msg2", "Content for message 2"),
+        factory::text_message_end("msg2"),
+        factory::text_message_end("msg1"),
+        factory::run_finished("thread", "run"),
     ])
     .await;
 
-    assert_eq!(out.len(), 3);
-    assert_validation(&out[2], "Cannot send 'TEXT_MESSAGE_START' event: A text message with ID 'msg1' is already in progress");
+    assert_eq!(out.len(), 8);
+    assert!(out.iter().all(|item| item.is_ok()));
 }
 
+// Ported from TypeScript `verify/__tests__/verify.concurrent.test.ts:99-170`.
 #[tokio::test]
-async fn concurrent_tool_calls_are_rejected_by_single_active_tool_call_model() {
+async fn concurrent_tool_calls_with_different_ids_pass() {
     let out = collect(vec![
         factory::run_started("thread", "run"),
         factory::tool_call_start("tool1", "search"),
         factory::tool_call_start("tool2", "calculate"),
+        factory::tool_call_args("tool1", "{\"query\":\"test\"}"),
+        factory::tool_call_args("tool2", "{\"expression\":\"1+1\"}"),
+        factory::tool_call_end("tool2"),
+        factory::tool_call_end("tool1"),
+        factory::run_finished("thread", "run"),
     ])
     .await;
 
-    assert_eq!(out.len(), 3);
-    assert_validation(
-        &out[2],
-        "Cannot send 'TOOL_CALL_START' event: A tool call with ID 'tool1' is already in progress",
-    );
+    assert_eq!(out.len(), 8);
+    assert!(out.iter().all(|item| item.is_ok()));
 }
 
 #[tokio::test]
@@ -78,7 +89,9 @@ async fn second_text_message_cannot_start_while_first_text_message_and_tool_call
     ])
     .await;
 
-    assert_validation(&out[5], "Cannot send 'TEXT_MESSAGE_START' event: A text message with ID 'msg1' is already in progress");
+    // Upstream allows a second concurrent message
+    // (`verify/__tests__/verify.concurrent.test.ts:171-262`).
+    assert!(out.iter().all(|item| item.is_ok()));
 }
 
 #[tokio::test]
@@ -185,16 +198,45 @@ async fn run_finished_while_tool_call_is_active_errors() {
     );
 }
 
+// Ported from TypeScript `verify/__tests__/verify.concurrent.test.ts:560-646`
+// ("complex concurrent scenario with many overlapping events"): five messages
+// and five tool calls stream and close in reverse order, all 52 events pass.
 #[tokio::test]
-async fn complex_many_overlapping_events_fail_at_first_unsupported_concurrent_start() {
-    let out = collect(vec![
-        factory::run_started("thread", "run"),
-        factory::text_message_start("msg1"),
-        factory::text_message_start("msg2"),
-        factory::tool_call_start("tool1", "test_tool"),
-    ])
-    .await;
+async fn complex_many_overlapping_events_pass() {
+    let message_ids = ["msg1", "msg2", "msg3", "msg4", "msg5"];
+    let tool_call_ids = ["tool1", "tool2", "tool3", "tool4", "tool5"];
 
-    assert_eq!(out.len(), 3);
-    assert_validation(&out[2], "Cannot send 'TEXT_MESSAGE_START' event: A text message with ID 'msg1' is already in progress");
+    let mut events = vec![factory::run_started("thread", "run")];
+    for id in message_ids {
+        events.push(factory::text_message_start(id));
+    }
+    for id in tool_call_ids {
+        events.push(factory::tool_call_start(id, "test_tool"));
+    }
+    for i in 0..3 {
+        for id in message_ids {
+            events.push(factory::text_message_content(
+                id,
+                format!("Content {i} for {id}"),
+            ));
+        }
+        for id in tool_call_ids {
+            events.push(factory::tool_call_args(id, format!("{{\"step\":{i}}}")));
+        }
+    }
+    for id in message_ids.into_iter().rev() {
+        events.push(factory::text_message_end(id));
+    }
+    for id in tool_call_ids.into_iter().rev() {
+        events.push(factory::tool_call_end(id));
+    }
+    events.push(factory::run_finished("thread", "run"));
+
+    let out = collect(events).await;
+
+    assert_eq!(out.len(), 52);
+    assert!(
+        out.iter().all(|item| item.is_ok()),
+        "all 52 events should verify: {out:?}"
+    );
 }

@@ -25,10 +25,13 @@
 //! that `agui-rs-proto` already vendors (`upstream-spec/schema.json`) and
 //! walked recursively, mirroring `stripAgainst`:
 //!
-//! - a described object strips every key its `properties` (own, plus those
-//!   composed in via `allOf`) does not name (`strip.ts:130-137`), unless the
-//!   schema marks itself open (`additionalProperties: true`, e.g.
-//!   `Metadata`; `strip.ts:116-134`);
+//! - a described object strips every key its flattened `properties` — its own,
+//!   plus everything its `allOf` composes in, transitively — does not name
+//!   (`strip.ts:130-137`), unless the schema marks itself open
+//!   (`additionalProperties: true`, e.g. `Metadata`; `strip.ts:116-134`);
+//!   the flattening mirrors the generated zod, which spreads mixin fields into
+//!   one shape (`core/src/generated/schemas.ts:524-532`: `UserMessageSchema`
+//!   carries `subagentRunId` flat, two composition steps down);
 //! - an array descends into each element and reports the index
 //!   (`strip.ts:163-179`);
 //! - a discriminated union recurses into the member whose const tag matches
@@ -152,10 +155,9 @@ fn strip_against(value: Value, shape: &Shape, path: &str, stripped: &mut Vec<Str
         Shape::OneOf(members) => strip_union(value, members, path, stripped),
         Shape::Object {
             properties,
-            all_of,
             required,
             open,
-        } => strip_object(value, properties, all_of, required, *open, path, stripped),
+        } => strip_object(value, properties, required, *open, path, stripped),
         Shape::Array(items) => match value {
             Value::Array(entries) => {
                 let mut out = Vec::with_capacity(entries.len());
@@ -184,7 +186,6 @@ fn strip_against(value: Value, shape: &Shape, path: &str, stripped: &mut Vec<Str
 fn strip_object(
     value: Value,
     properties: &HashMap<String, Shape>,
-    all_of: &[String],
     required: &HashSet<String>,
     open: bool,
     path: &str,
@@ -197,15 +198,9 @@ fn strip_object(
     let mut result = Map::new();
 
     for (key, child_value) in record {
-        let field_shape = properties.get(&key).or_else(|| {
-            all_of.iter().find_map(|composed| {
-                definitions()
-                    .get(composed.as_str())
-                    .and_then(Definition::properties)
-                    .and_then(|props| props.get(&key))
-            })
-        });
-        let Some(field_shape) = field_shape else {
+        // The table is already flattened: every key the schema describes is
+        // here, however deep its allOf chain (`schemas.ts:524-532`).
+        let Some(field_shape) = properties.get(&key) else {
             if open {
                 // The spec leaves this object open (`strip.ts:116-134`).
                 result.insert(key, child_value);
@@ -226,7 +221,13 @@ fn strip_object(
             Stripped::Drop => {
                 // An unrecognisable value in an OPTIONAL position is
                 // removable; in a REQUIRED one the drop cascades
-                // (`strip.ts:143-157`).
+                // (`strip.ts:143-157`). Upstream decides "optional" with
+                // `field.safeParse(undefined).success`, which a `default`
+                // also passes; this crate reads `required` instead. The only
+                // two defaults the 1.0 schema carries
+                // (`TextMessageRole`'s `role`, schema.json:171;
+                // `replace`, schema.json:458) are string/bool and never
+                // Drop, so the cheaper read cannot diverge today.
                 stripped.truncate(mark);
                 if required.contains(key.as_str()) {
                     return Stripped::Drop;
@@ -246,18 +247,23 @@ fn strip_union(
     stripped: &mut Vec<String>,
 ) -> Stripped {
     if let Value::Object(record) = &value {
-        // Discriminated union: recurse into the member whose const tag(s) the
-        // value's tags match (`strip.ts:213-220`).
-        let tagged: Vec<&Shape> = members
-            .iter()
-            .filter(|member| !const_tags_of(member).is_empty())
-            .collect();
-        if !tagged.is_empty() {
-            for member in tagged {
-                let matches = const_tags_of(member)
-                    .iter()
-                    .all(|(key, tag)| record.get(key) == Some(tag));
-                if matches {
+        // Discriminated union: recurse into the member whose const tag the
+        // value's DISCRIMINANT matches (`strip.ts:213-220`). Every union in
+        // the 1.0 schema names its key in the zod `discriminatedUnion`
+        // constructor (`schemas.ts:228,292,425,582,820,1079,1127`), and that
+        // key is always the single REQUIRED const: a member may carry a
+        // second, optional const alongside it (`ToolCallResultEvent`'s
+        // `role`, `schemas.ts:316`), which is not part of the match. This
+        // crate has no discriminator metadata, so the required const stands
+        // in for it; the required-const read of every oneOf member below is
+        // verified once by hand against the vendored schema.
+        let discriminant_key = discriminant_of(members);
+        if let Some(key) = &discriminant_key {
+            for member in members {
+                let Some(Shape::Const(tag)) = member_const_tag(member, key) else {
+                    continue;
+                };
+                if record.get(key) == Some(tag) {
                     return strip_against(value, member, path, stripped);
                 }
             }
@@ -308,6 +314,45 @@ fn const_tags_of(shape: &Shape) -> Vec<(String, Value)> {
         .collect()
 }
 
+/// The const key every member requires, when one exists: the union's
+/// discriminant. A member whose required const names a different key, or
+/// which requires no const, leaves no single discriminant to read.
+fn discriminant_of(members: &[Shape]) -> Option<String> {
+    let mut key: Option<String> = None;
+    for member in members {
+        let tags = const_tags_of(member);
+        let required = member_required(member);
+        let matched: Vec<&str> = tags
+            .iter()
+            .filter(|(name, _)| required.contains(name))
+            .map(|(name, _)| name.as_str())
+            .collect();
+        match (key.as_deref(), matched.as_slice()) {
+            (_, &[]) => return None,
+            (Some(prev), &[name]) if prev != name => return None,
+            (None, &[name, ..]) => key = Some(name.to_owned()),
+            _ => {}
+        }
+    }
+    key
+}
+
+/// A member's required keys, resolved through a `$ref` at strip time.
+fn member_required(shape: &Shape) -> HashSet<String> {
+    match shape.object_shape() {
+        Some(Shape::Object { required, .. }) => required.clone(),
+        _ => HashSet::new(),
+    }
+}
+
+/// The value the member fixes at `key`, when it fixes one directly.
+fn member_const_tag<'a>(shape: &'a Shape, key: &str) -> Option<&'a Shape> {
+    match shape.object_shape() {
+        Some(Shape::Object { properties, .. }) => properties.get(key),
+        _ => None,
+    }
+}
+
 // --- schema reading ---------------------------------------------------------
 
 #[derive(Clone)]
@@ -317,9 +362,10 @@ enum Shape {
     /// A `oneOf` over member shapes.
     OneOf(Vec<Shape>),
     Object {
+        /// Flattened properties: own, plus everything `allOf` composes in,
+        /// transitively (mirrors the generated zod's spread shape,
+        /// `core/src/generated/schemas.ts:524-532`).
         properties: HashMap<String, Shape>,
-        /// `allOf` members pulled in via `$ref`, by `$defs` name.
-        all_of: Vec<String>,
         /// Own `required`, plus everything the composed schemas require.
         required: HashSet<String>,
         /// The spec leaves this object open (`additionalProperties: true`,
@@ -350,17 +396,11 @@ impl Shape {
 
 struct Definition {
     shape: Shape,
-    /// Property keys the definition's own `properties` describe.
-    properties: Option<HashMap<String, Shape>>,
 }
 
 impl Definition {
     fn shape(&self) -> &Shape {
         &self.shape
-    }
-
-    fn properties(&self) -> Option<&HashMap<String, Shape>> {
-        self.properties.as_ref()
     }
 }
 
@@ -416,32 +456,26 @@ fn build_definitions() -> HashMap<String, Definition> {
     raw_defs
         .iter()
         .filter_map(|(name, def)| {
-            let shape = shape_of(def, &raw_defs)?;
-            let properties = shape.object_shape().and_then(Shape::as_properties).cloned();
-            Some((name.clone(), Definition { shape, properties }))
+            let shape = shape_of(def, Some(name), &raw_defs)?;
+            Some((name.clone(), Definition { shape }))
         })
         .collect()
-}
-
-impl Shape {
-    fn as_properties(&self) -> Option<&HashMap<String, Shape>> {
-        match self {
-            Shape::Object { properties, .. } => Some(properties),
-            _ => None,
-        }
-    }
 }
 
 /// Reads one JSON-Schema node into a [`Shape`]. Handles exactly the constructs
 /// the frozen 1.0 schema uses: `$ref`, `oneOf`, `allOf` composition through
 /// `$ref`, `type: object` with `properties`, `type: array` with `items`,
-/// `const`, and everything else as an opaque leaf.
-fn shape_of(def: &Value, raw_defs: &Map<String, Value>) -> Option<Shape> {
+/// `const`, and everything else as an opaque leaf. `name` is the `$defs` key
+/// the node sits under, when it has one (`None` for inline schemas).
+fn shape_of(def: &Value, name: Option<&str>, raw_defs: &Map<String, Value>) -> Option<Shape> {
     if let Some(reference) = def.get("$ref").and_then(Value::as_str) {
         return Some(Shape::Ref(reference.rsplit('/').next()?.to_owned()));
     }
     if let Some(members) = def.get("oneOf").and_then(Value::as_array) {
-        let shapes: Option<Vec<Shape>> = members.iter().map(|m| shape_of(m, raw_defs)).collect();
+        let shapes: Option<Vec<Shape>> = members
+            .iter()
+            .map(|m| shape_of(m, None, raw_defs))
+            .collect();
         if let Some(members) = shapes {
             return Some(Shape::OneOf(members));
         }
@@ -453,54 +487,24 @@ fn shape_of(def: &Value, raw_defs: &Map<String, Value>) -> Option<Shape> {
 
     match def.get("type").and_then(Value::as_str) {
         Some("object") => {
+            // Flattened, transitively: the generated zod spreads mixin fields
+            // into one shape (`schemas.ts:524-532`), so `subagentRunId` — two
+            // allOf steps below `UserMessage` — sits flat in its table. Walk
+            // the composition the same way; later members do not override
+            // earlier ones, matching `Object.assign` order in the generator.
             let mut properties = HashMap::new();
-            if let Some(props) = def.get("properties").and_then(Value::as_object) {
-                for (key, prop) in props {
-                    properties.insert(key.clone(), shape_of(prop, raw_defs).unwrap_or(Shape::Leaf));
-                }
-            }
-            let mut all_of = Vec::new();
-            if let Some(composed) = def.get("allOf").and_then(Value::as_array) {
-                for member in composed {
-                    if let Some(name) = member
-                        .get("$ref")
-                        .and_then(Value::as_str)
-                        .map(|r| r.rsplit('/').next().unwrap_or_default().to_owned())
-                    {
-                        all_of.push(name);
-                    }
-                }
-            }
-            let mut required = def
-                .get("required")
-                .and_then(Value::as_array)
-                .map(|required| {
-                    required
-                        .iter()
-                        .filter_map(Value::as_str)
-                        .map(str::to_owned)
-                        .collect::<HashSet<_>>()
-                })
-                .unwrap_or_default();
-            for name in &all_of {
-                if let Some(composed) = raw_defs.get(name) {
-                    required.extend(required_keys_of(composed, raw_defs));
-                }
-            }
-            let name_is_open = raw_defs
-                .iter()
-                .any(|(key, raw)| raw == def && SPEC_OPEN_DEFS.contains(&key.as_str()));
+            flatten_properties(def, raw_defs, 0, &mut properties);
+            let required = required_keys_of(def, raw_defs);
             Some(Shape::Object {
                 properties,
-                all_of,
                 required,
-                open: def.get("additionalProperties") == Some(&Value::Bool(true)) || name_is_open,
+                open: is_open(def, name),
             })
         }
         Some("array") => {
             let items = def
                 .get("items")
-                .and_then(|items| shape_of(items, raw_defs))
+                .and_then(|items| shape_of(items, None, raw_defs))
                 .unwrap_or(Shape::Leaf);
             Some(Shape::Array(Box::new(items)))
         }
@@ -508,10 +512,51 @@ fn shape_of(def: &Value, raw_defs: &Map<String, Value>) -> Option<Shape> {
     }
 }
 
+/// Fills `out` with the object's own `properties` and everything its `allOf`
+/// composes in, transitively — the flattened table the generated zod reads
+/// (`schemas.ts:524-532`). The frozen 1.0 schema is acyclic (verified once by
+/// hand), so this terminates; the depth guard turns a future cycle into
+/// silence rather than a stack overflow.
+fn flatten_properties(
+    def: &Value,
+    raw_defs: &Map<String, Value>,
+    depth: usize,
+    out: &mut HashMap<String, Shape>,
+) {
+    if depth > REQUIRED_DEPTH_LIMIT {
+        return;
+    }
+    if let Some(props) = def.get("properties").and_then(Value::as_object) {
+        for (key, prop) in props {
+            out.entry(key.clone())
+                .or_insert_with(|| shape_of(prop, None, raw_defs).unwrap_or(Shape::Leaf));
+        }
+    }
+    if let Some(members) = def.get("allOf").and_then(Value::as_array) {
+        for member in members {
+            if let Some(name) = def_name(member).and_then(|name| raw_defs.get(name)) {
+                flatten_properties(name, raw_defs, depth + 1, out);
+            }
+        }
+    }
+}
+
+/// Whether this object schema is one the spec leaves open: it says so itself
+/// (`additionalProperties: true`, e.g. `Metadata`), or it is one of the six
+/// RFC 6902 operations, which RFC 6902 §4 requires to ignore members they do
+/// not define. Compared by name rather than by value: the operations are
+/// `oneOf` members of `JsonPatchOperation`, so no inline copy of them exists.
+fn is_open(def: &Value, name: Option<&str>) -> bool {
+    def.get("additionalProperties") == Some(&Value::Bool(true))
+        || name.is_some_and(|name| SPEC_OPEN_DEFS.contains(&name))
+}
+
 /// A definition's required keys: its own, plus everything its `allOf`
-/// composes in. The frozen 1.0 schema is acyclic (verified once by hand), so
-/// this terminates; the depth guard turns a future cycle into silence rather
-/// than a stack overflow.
+/// composes in — already transitive, so `UserMessage` picks up nothing extra
+/// here (`BaseMessage` carries the only nested `required`). Shares
+/// [`REQUIRED_DEPTH_LIMIT`] with [`flatten_properties`]. The frozen 1.0
+/// schema is acyclic (verified once by hand), so this terminates; the depth
+/// guard turns a future cycle into silence rather than a stack overflow.
 fn required_keys_of(def: &Value, raw_defs: &Map<String, Value>) -> HashSet<String> {
     required_keys_of_inner(def, raw_defs, 0)
 }
@@ -873,6 +918,166 @@ mod tests {
         // An object carrying no member's role is removed whole
         // (`strip.ts:221-222`), reported at the element.
         assert_eq!(kept["messages"].as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn subagent_run_id_survives_two_all_of_steps_down() {
+        // The regression lock for the P0 this fix closes: `subagentRunId`
+        // sits on `Attributable`, two allOf steps below `UserMessage`
+        // (schema.json:109, :1097) — the generated zod flattens it into the
+        // message shape (`schemas.ts:524-532`), so upstream keeps it. One
+        // of each composed message type; `ToolMessage` composes
+        // `Attributable` directly.
+        let mut warns = 0;
+        let kept = capture_warns(&mut warns, || {
+            enforce_event(json!({
+                "type": "MESSAGES_SNAPSHOT",
+                "messages": [
+                    {"id": "m1", "role": "user", "content": "hi", "subagentRunId": "s1"},
+                    {"id": "m2", "role": "assistant", "content": "hey", "subagentRunId": "s1"},
+                    {"id": "m3", "role": "system", "content": "sys", "subagentRunId": "s1"},
+                    {"id": "m4", "role": "developer", "content": "dev", "subagentRunId": "s1"},
+                    {"id": "m5", "role": "tool", "toolCallId": "c1", "content": "res",
+                     "subagentRunId": "s1"},
+                ],
+            }))
+            .expect("known event survives")
+        });
+        assert_eq!(warns, 0, "every field here is described");
+        for (index, expected) in ["s1"; 5].into_iter().enumerate() {
+            assert_eq!(
+                kept["messages"][index]["subagentRunId"], expected,
+                "message {index} keeps its attribution"
+            );
+        }
+    }
+
+    #[test]
+    fn other_base_message_fields_composed_two_steps_down_also_survive() {
+        // `name`, `encryptedValue`, `metadata` live on `BaseMessage`, one
+        // step down from the four messages that compose it.
+        let kept = enforce_event(json!({
+            "type": "MESSAGES_SNAPSHOT",
+            "messages": [
+                {"id": "m1", "role": "assistant", "content": "hi", "name": "a",
+                 "encryptedValue": "e", "metadata": {"k": "v"}},
+            ],
+        }))
+        .expect("known event survives");
+        assert_eq!(kept["messages"][0]["name"], "a");
+        assert_eq!(kept["messages"][0]["encryptedValue"], "e");
+        assert_eq!(kept["messages"][0]["metadata"], json!({"k": "v"}));
+    }
+
+    #[test]
+    fn a_tool_call_keeps_no_attribution_but_the_message_does() {
+        // `ToolCall` carries no `subagentRunId` and inherits its containing
+        // message's (schema.json:1287, types.proto:144): an attempt to hang
+        // one on the call itself is unrecognised and stripped, while the
+        // message's own attribution stays.
+        let mut warns: Vec<String> = Vec::new();
+        let kept = capture_warns_texts(&mut warns, || {
+            enforce_event(json!({
+                "type": "MESSAGES_SNAPSHOT",
+                "messages": [
+                    {"id": "m1", "role": "assistant", "subagentRunId": "s1",
+                     "toolCalls": [{"id": "c1", "type": "function",
+                                    "function": {"name": "f", "arguments": "{}"},
+                                    "subagentRunId": "s1"}]},
+                ],
+            }))
+            .expect("known event survives")
+        });
+        assert_eq!(
+            warns,
+            vec!["/messages/0/toolCalls/0/subagentRunId".to_string()]
+        );
+        assert_eq!(kept["messages"][0]["subagentRunId"], "s1");
+        assert!(kept["messages"][0]["toolCalls"][0]
+            .get("subagentRunId")
+            .is_none());
+    }
+
+    #[test]
+    fn an_unknown_field_next_to_a_flattened_one_is_still_stripped() {
+        // The fix must not turn enforcement into no-op: `junk` is described
+        // nowhere in `UserMessage`'s flattened table and still goes.
+        let mut warns = 0;
+        let kept = capture_warns(&mut warns, || {
+            enforce_event(json!({
+                "type": "MESSAGES_SNAPSHOT",
+                "messages": [
+                    {"id": "m1", "role": "user", "content": "hi",
+                     "subagentRunId": "s1", "junk": 1},
+                ],
+            }))
+            .expect("known event survives")
+        });
+        assert_eq!(warns, 1);
+        assert_eq!(kept["messages"][0]["subagentRunId"], "s1");
+        assert!(kept["messages"][0].get("junk").is_none());
+    }
+
+    #[test]
+    fn the_flattened_required_set_and_table_reach_the_message_shape() {
+        // The table shape itself: `UserMessage`'s properties carry the
+        // members composed two steps down (`subagentRunId` from
+        // `Attributable`, schema.json:109) and one step down (`name` et al
+        // from `BaseMessage`, schema.json:1097), and its required union is
+        // the composition (`id`, `role`, `content`).
+        let Some(Shape::Object {
+            properties,
+            required,
+            ..
+        }) = definitions()
+            .get("UserMessage")
+            .map(Definition::shape)
+            .and_then(Shape::object_shape)
+        else {
+            panic!("UserMessage should be an object shape");
+        };
+        for key in [
+            "subagentRunId",
+            "name",
+            "encryptedValue",
+            "metadata",
+            "id",
+            "role",
+        ] {
+            assert!(
+                properties.contains_key(key),
+                "{key} missing from the flattened table"
+            );
+        }
+        for key in ["id", "role", "content"] {
+            assert!(
+                required.contains(key),
+                "{key} missing from the required union"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unrecognisable_content_part_still_leaves_the_attribution_behind() {
+        // End to end over the composed read: a media part whose source kind
+        // nothing knows is removed from the array (`strip.ts:143-157`),
+        // while the message's own `subagentRunId` — read off the flattened
+        // table — survives untouched.
+        let mut warns: Vec<String> = Vec::new();
+        let kept = capture_warns_texts(&mut warns, || {
+            enforce_event(json!({
+                "type": "MESSAGES_SNAPSHOT",
+                "messages": [
+                    {"id": "m1", "role": "user", "subagentRunId": "s1",
+                     "content": [{"type": "image", "source": {"type": "future-kind"}},
+                                 {"type": "text", "text": "kept"}]},
+                ],
+            }))
+            .expect("known event survives")
+        });
+        assert_eq!(warns, vec!["/messages/0/content/0".to_string()]);
+        assert_eq!(kept["messages"][0]["subagentRunId"], "s1");
+        assert_eq!(kept["messages"][0]["content"].as_array().unwrap().len(), 1);
     }
 
     // -- helpers -------------------------------------------------------------

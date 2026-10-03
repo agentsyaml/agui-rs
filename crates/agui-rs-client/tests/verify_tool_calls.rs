@@ -95,15 +95,23 @@ async fn tool_call_end_before_start_errors() {
 }
 
 #[tokio::test]
-async fn second_tool_call_start_while_active_errors() {
+async fn concurrent_distinct_tool_call_starts_pass() {
+    // Upstream `verify/__tests__/verify.concurrent.test.ts:99-170`: a second,
+    // distinct tool call id is allowed while one is open; only the SAME id
+    // re-opening is rejected (duplicate_tool_call_id_start_errors below).
     let out = collect(vec![
         factory::run_started("thread", "run"),
         factory::tool_call_start("tc1", "search"),
         factory::tool_call_start("tc2", "calculate"),
+        factory::tool_call_args("tc1", "{}"),
+        factory::tool_call_args("tc2", "{}"),
+        factory::tool_call_end("tc2"),
+        factory::tool_call_end("tc1"),
+        factory::run_finished("thread", "run"),
     ])
     .await;
 
-    assert_validation(&out[2], "A tool call with ID 'tc1' is already in progress");
+    assert!(out.iter().all(Result::is_ok));
 }
 
 #[tokio::test]
