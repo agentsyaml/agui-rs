@@ -614,6 +614,13 @@ macro_rules! impl_event_dispatch {
                     $(Self::$variant(e) => &e.base,)+
                 }
             }
+
+            /// Returns the shared [`BaseEventFields`] mutably.
+            pub fn base_mut(&mut self) -> &mut BaseEventFields {
+                match self {
+                    $(Self::$variant(e) => &mut e.base,)+
+                }
+            }
         }
     };
 }

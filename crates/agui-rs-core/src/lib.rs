@@ -9,6 +9,7 @@ pub mod capabilities;
 pub mod error;
 pub mod event_factories;
 pub mod events;
+pub mod metadata;
 pub mod token_usage;
 pub mod types;
 
@@ -37,6 +38,7 @@ pub use events::{
     TextMessageStartEvent, TokenUsage, ToolCallArgsEvent, ToolCallChunkEvent, ToolCallEndEvent,
     ToolCallResultEvent, ToolCallStartEvent, ToolResultRole,
 };
+pub use metadata::{merge_metadata, AGUI_METADATA_KEY};
 pub use token_usage::{
     aggregate_token_usage, token_usage_from_ai_sdk_usage, token_usage_from_lang_chain_metadata,
 };

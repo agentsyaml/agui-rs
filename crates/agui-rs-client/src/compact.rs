@@ -1,16 +1,58 @@
 use std::collections::HashMap;
 
 use agui_rs_core::{
-    AttributableFields, BaseEventFields, Event, StateSnapshotEvent, TextMessageContentEvent,
-    ToolCallArgsEvent,
+    merge_metadata, AttributableFields, BaseEventFields, Event, StateSnapshotEvent,
+    TextMessageContentEvent, ToolCallArgsEvent,
 };
 use serde_json::Value;
+
+/// Upstream `carryStartMetadata` (`compact.ts:40-51`). A start event can be
+/// replayed before its end — the HITL re-sync path does this, which is why the
+/// reducer's start handling is idempotent. Uncompacted, both starts merge into
+/// the message; keep that true after compaction instead of letting the later
+/// start silently replace the earlier one's keys.
+fn carry_start_metadata(previous: Option<Event>, next: Event) -> Event {
+    let Some(previous) = previous else {
+        return next;
+    };
+    let merged = merge_metadata(
+        previous.base().metadata.as_ref(),
+        next.base().metadata.as_ref(),
+    );
+    let mut next = next;
+    next.base_mut().metadata = merged;
+    next
+}
+
+/// Upstream `replaceStartFields` (`compact.ts:59-65`). A start replayed *after*
+/// deltas have been buffered keeps its own non-metadata fields — the reducer
+/// deliberately renames an existing tool call on such a replay — but its
+/// metadata does not ride the start, because compaction emits the start ahead
+/// of the collapsed delta event. The caller stages it separately so arrival
+/// order is preserved.
+fn replace_start_fields(previous: Option<Event>, next: Event) -> Event {
+    let carried = previous.and_then(|previous| previous.base().metadata.clone());
+    let mut next = next;
+    next.base_mut().metadata = carried;
+    next
+}
+
+/// Upstream `collapseMetadata` (`compact.ts:68-73`).
+fn collapse_metadata<'a>(events: impl Iterator<Item = &'a Event>) -> Option<Value> {
+    let mut merged = None;
+    for event in events {
+        merged = merge_metadata(merged.as_ref(), event.base().metadata.as_ref());
+    }
+    merged
+}
 
 struct PendingTextMessage {
     start: Option<Event>,
     contents: Vec<TextMessageContentEvent>,
     end: Option<Event>,
     other_events: Vec<Event>,
+    /// Metadata staged from events that arrived after the start was hoisted.
+    post_start_metadata: Option<Value>,
 }
 
 impl PendingTextMessage {
@@ -20,6 +62,7 @@ impl PendingTextMessage {
             contents: Vec::new(),
             end: None,
             other_events: Vec::new(),
+            post_start_metadata: None,
         }
     }
 
@@ -33,6 +76,8 @@ struct PendingToolCall {
     args: Vec<ToolCallArgsEvent>,
     end: Option<Event>,
     other_events: Vec<Event>,
+    /// See [`PendingTextMessage::post_start_metadata`].
+    post_start_metadata: Option<Value>,
 }
 
 impl PendingToolCall {
@@ -42,6 +87,7 @@ impl PendingToolCall {
             args: Vec::new(),
             end: None,
             other_events: Vec::new(),
+            post_start_metadata: None,
         }
     }
 
@@ -86,15 +132,33 @@ pub fn compact_events(events: Vec<Event>) -> Vec<Event> {
                 let pending = pending_text_messages
                     .entry(message_id.clone())
                     .or_insert_with(PendingTextMessage::new);
-                pending.start = Some(Event::TextMessageStart(start));
+                let start_event = Event::TextMessageStart(start);
+                if pending.contents.is_empty() {
+                    pending.start = Some(carry_start_metadata(pending.start.take(), start_event));
+                } else {
+                    let staged = merge_metadata(
+                        pending.post_start_metadata.as_ref(),
+                        start_event.base().metadata.as_ref(),
+                    );
+                    pending.post_start_metadata = staged;
+                    pending.start = Some(replace_start_fields(pending.start.take(), start_event));
+                }
                 push_open_id(&mut open_text_order, &message_id);
             }
             Event::TextMessageContent(content) => {
-                pending_text_messages
+                let staged = merge_metadata(
+                    pending_text_messages
+                        .entry(content.message_id.clone())
+                        .or_insert_with(PendingTextMessage::new)
+                        .post_start_metadata
+                        .as_ref(),
+                    content.base.metadata.as_ref(),
+                );
+                let pending = pending_text_messages
                     .entry(content.message_id.clone())
-                    .or_insert_with(PendingTextMessage::new)
-                    .contents
-                    .push(content);
+                    .or_insert_with(PendingTextMessage::new);
+                pending.post_start_metadata = staged;
+                pending.contents.push(content);
             }
             Event::TextMessageEnd(end) => {
                 let message_id = end.message_id.clone();
@@ -110,15 +174,33 @@ pub fn compact_events(events: Vec<Event>) -> Vec<Event> {
                 let pending = pending_tool_calls
                     .entry(tool_call_id.clone())
                     .or_insert_with(PendingToolCall::new);
-                pending.start = Some(Event::ToolCallStart(start));
+                let start_event = Event::ToolCallStart(start);
+                if pending.args.is_empty() {
+                    pending.start = Some(carry_start_metadata(pending.start.take(), start_event));
+                } else {
+                    let staged = merge_metadata(
+                        pending.post_start_metadata.as_ref(),
+                        start_event.base().metadata.as_ref(),
+                    );
+                    pending.post_start_metadata = staged;
+                    pending.start = Some(replace_start_fields(pending.start.take(), start_event));
+                }
                 push_open_id(&mut open_tool_order, &tool_call_id);
             }
             Event::ToolCallArgs(args) => {
-                pending_tool_calls
+                let staged = merge_metadata(
+                    pending_tool_calls
+                        .entry(args.tool_call_id.clone())
+                        .or_insert_with(PendingToolCall::new)
+                        .post_start_metadata
+                        .as_ref(),
+                    args.base.metadata.as_ref(),
+                );
+                let pending = pending_tool_calls
                     .entry(args.tool_call_id.clone())
-                    .or_insert_with(PendingToolCall::new)
-                    .args
-                    .push(args);
+                    .or_insert_with(PendingToolCall::new);
+                pending.post_start_metadata = staged;
+                pending.args.push(args);
             }
             Event::ToolCallEnd(end) => {
                 let tool_call_id = end.tool_call_id.clone();
@@ -196,6 +278,10 @@ fn flush_state(state_events: &mut Vec<Event>, compacted: &mut Vec<Event>) {
         return;
     }
 
+    // Upstream `compact.ts:445` collapses the metadata of every state event
+    // that went into the snapshot onto the snapshot itself.
+    let collapsed_metadata = collapse_metadata(state_events.iter());
+
     let mut state = Value::Object(serde_json::Map::new());
     for event in state_events.drain(..) {
         match event {
@@ -217,7 +303,10 @@ fn flush_state(state_events: &mut Vec<Event>, compacted: &mut Vec<Event>) {
 
     compacted.push(Event::StateSnapshot(StateSnapshotEvent {
         snapshot: state,
-        base: BaseEventFields::default(),
+        base: BaseEventFields {
+            metadata: collapsed_metadata,
+            ..Default::default()
+        },
         attributable: AttributableFields::default(),
     }));
 }
@@ -243,7 +332,10 @@ fn flush_text_message(
                 .into_iter()
                 .map(|part| part.delta)
                 .collect(),
-            base: BaseEventFields::default(),
+            base: BaseEventFields {
+                metadata: pending.post_start_metadata,
+                ..Default::default()
+            },
             attributable: AttributableFields::default(),
         }));
     }
@@ -272,7 +364,10 @@ fn flush_tool_call(
         compacted.push(Event::ToolCallArgs(ToolCallArgsEvent {
             tool_call_id: tool_call_id.to_string(),
             delta: pending.args.into_iter().map(|part| part.delta).collect(),
-            base: BaseEventFields::default(),
+            base: BaseEventFields {
+                metadata: pending.post_start_metadata,
+                ..Default::default()
+            },
             attributable: AttributableFields::default(),
         }));
     }
@@ -740,5 +835,90 @@ mod tests {
                 })
             );
         }
+    }
+
+    fn text_start_with_metadata(message_id: &str, metadata: serde_json::Value) -> Event {
+        Event::TextMessageStart(agui_rs_core::TextMessageStartEvent {
+            message_id: message_id.into(),
+            role: TextMessageRole::Assistant,
+            attributable: AttributableFields::default(),
+            name: None,
+            base: BaseEventFields {
+                metadata: Some(metadata),
+                ..Default::default()
+            },
+        })
+    }
+
+    fn text_content_with_metadata(
+        message_id: &str,
+        delta: &str,
+        metadata: serde_json::Value,
+    ) -> Event {
+        Event::TextMessageContent(agui_rs_core::TextMessageContentEvent {
+            message_id: message_id.into(),
+            delta: delta.into(),
+            base: BaseEventFields {
+                metadata: Some(metadata),
+                ..Default::default()
+            },
+            attributable: AttributableFields::default(),
+        })
+    }
+
+    /// Upstream `carryStartMetadata`: a start replayed before its end merges
+    /// metadata instead of letting the later start replace the earlier keys.
+    #[test]
+    fn carries_metadata_across_a_replayed_start() {
+        let result = compact_events(vec![
+            text_start_with_metadata("m1", json!({"a": 1})),
+            text_start_with_metadata("m1", json!({"b": 2})),
+            factory::text_message_end("m1"),
+        ]);
+
+        assert_eq!(result[0].base().metadata, Some(json!({"a": 1, "b": 2})));
+    }
+
+    /// Upstream `replaceStartFields`: a start replayed once deltas are buffered
+    /// keeps its own fields, and its metadata rides the collapsed delta rather
+    /// than the hoisted start, so arrival order survives compaction.
+    #[test]
+    fn a_start_replayed_after_content_stages_its_metadata() {
+        let result = compact_events(vec![
+            text_start_with_metadata("m1", json!({"from": "first"})),
+            text_content_with_metadata("m1", "hel", json!({"from": "content"})),
+            text_start_with_metadata("m1", json!({"from": "replay"})),
+            factory::text_message_end("m1"),
+        ]);
+
+        // The replayed start is not hoisted: its own metadata stays on it.
+        assert_eq!(result[0].base().metadata, Some(json!({"from": "first"})));
+        // The collapsed content carries the staged metadata.
+        assert_eq!(result[1].base().metadata, Some(json!({"from": "replay"})));
+    }
+
+    /// Upstream `collapseMetadata` (`compact.ts:445`): the metadata of every
+    /// state event folded onto the snapshot that replaces them.
+    #[test]
+    fn collapses_state_metadata_onto_the_snapshot() {
+        let with_meta = |value: serde_json::Value, metadata: serde_json::Value| {
+            Event::StateSnapshot(agui_rs_core::StateSnapshotEvent {
+                snapshot: value,
+                base: BaseEventFields {
+                    metadata: Some(metadata),
+                    ..Default::default()
+                },
+                attributable: AttributableFields::default(),
+            })
+        };
+
+        let result = compact_events(vec![
+            with_meta(json!({"n": 1}), json!({"a": 1})),
+            with_meta(json!({"n": 2}), json!({"b": 2})),
+            factory::run_started("thread", "run"),
+            factory::run_finished("thread", "run"),
+        ]);
+
+        assert_eq!(result[0].base().metadata, Some(json!({"a": 1, "b": 2})));
     }
 }

@@ -1,3 +1,4 @@
+use agui_rs_core::merge_metadata;
 use agui_rs_core::types::{
     ActivityMessage, AssistantMessage, DeveloperMessage, ReasoningMessage, SystemMessage,
     ToolMessage, UserMessage,
@@ -53,21 +54,64 @@ where
     })
 }
 
+/// Folds the event's metadata into the target's accumulator (`merge_metadata`
+/// in `agui-rs-core`, mirroring upstream `metadata.ts:53-63`). Event-level
+/// metadata typed as a non-object `Value` is ignored rather than replacing,
+/// since the schema pins event metadata to an object.
+fn merge_event_metadata(
+    target: &mut Option<serde_json::Map<String, Value>>,
+    event_metadata: Option<&Value>,
+) {
+    let Some(incoming @ Value::Object(_)) = event_metadata else {
+        return;
+    };
+    *target = match merge_metadata(
+        target
+            .as_ref()
+            .map(|map| Value::Object(map.clone()))
+            .as_ref(),
+        Some(incoming),
+    ) {
+        Some(Value::Object(merged)) => Some(merged),
+        _ => None,
+    };
+}
+
+fn message_metadata_mut(message: &mut Message) -> &mut Option<serde_json::Map<String, Value>> {
+    match message {
+        Message::Developer(message) => &mut message.metadata,
+        Message::System(message) => &mut message.metadata,
+        Message::Assistant(message) => &mut message.metadata,
+        Message::User(message) => &mut message.metadata,
+        Message::Tool(message) => &mut message.metadata,
+        Message::Reasoning(message) => &mut message.metadata,
+        Message::Activity(message) => &mut message.metadata,
+    }
+}
+
 pub fn apply_event(state: &mut ApplyState, event: &Event) -> Result<()> {
     match event {
         Event::TextMessageStart(event) => {
-            if !state
+            // The upstream idempotency guard (activity under a reused id
+            // drops the text event) lives in its own handler; ours collapses
+            // to "find or create" because `apply_event` streams into the
+            // message it finds either way.
+            let message = if let Some(existing) = state
                 .messages
-                .iter()
-                .any(|message| message.id() == event.message_id)
+                .iter_mut()
+                .find(|message| message.id() == event.message_id)
             {
+                existing
+            } else {
                 state.messages.push(new_text_message(
                     &event.message_id,
                     event.role,
                     event.name.clone(),
                     event.attributable.subagent_run_id.clone(),
                 ));
-            }
+                state.messages.last_mut().expect("just pushed")
+            };
+            merge_event_metadata(message_metadata_mut(message), event.base.metadata.as_ref());
         }
         Event::TextMessageContent(event) => {
             let message = state
@@ -78,16 +122,37 @@ pub fn apply_event(state: &mut ApplyState, event: &Event) -> Result<()> {
                     AgUiError::validation(format!("message '{}' not found", event.message_id))
                 })?;
             append_message_content(message, &event.delta)?;
+            merge_event_metadata(
+                message_metadata_mut(message),
+                event.base.metadata.as_ref(),
+            );
         }
-        Event::TextMessageEnd(_) => {}
+        Event::TextMessageEnd(event) => {
+            if let Some(message) = state
+                .messages
+                .iter_mut()
+                .find(|message| message.id() == event.message_id)
+            {
+                // The end is where late-known values — token usage, finish
+                // reason — typically arrive (`apply/default.ts:362-365`).
+                merge_event_metadata(message_metadata_mut(message), event.base.metadata.as_ref());
+            }
+        }
         Event::ToolCallStart(event) => apply_tool_call_start(&mut state.messages, event)?,
         Event::ToolCallArgs(event) => {
             let tool_call = find_tool_call_mut(&mut state.messages, &event.tool_call_id)?;
             tool_call.function.arguments.push_str(&event.delta);
+            merge_event_metadata(&mut tool_call.metadata, event.base.metadata.as_ref());
         }
-        Event::ToolCallEnd(_) => {}
+        Event::ToolCallEnd(event) => {
+            // Merge before onNewToolCall — an end event carries the values only
+            // known once the call is closed (`apply/default.ts:585-589`).
+            if let Ok(tool_call) = find_tool_call_mut(&mut state.messages, &event.tool_call_id) {
+                merge_event_metadata(&mut tool_call.metadata, event.base.metadata.as_ref());
+            }
+        }
         Event::ToolCallResult(event) => {
-            let tool_message = Message::Tool(ToolMessage {
+            let mut tool_message = Message::Tool(ToolMessage {
                 id: event.message_id.clone(),
                 content: event.content.clone(),
                 tool_call_id: event.tool_call_id.clone(),
@@ -96,6 +161,10 @@ pub fn apply_event(state: &mut ApplyState, event: &Event) -> Result<()> {
                 subagent_run_id: event.attributable.subagent_run_id.clone(),
                 metadata: None,
             });
+            merge_event_metadata(
+                message_metadata_mut(&mut tool_message),
+                event.base.metadata.as_ref(),
+            );
 
             // Place the tool result immediately after the assistant message
             // that issued the matching tool call, not at the end. A result
@@ -141,19 +210,25 @@ pub fn apply_event(state: &mut ApplyState, event: &Event) -> Result<()> {
         Event::ActivityDelta(event) => apply_activity_delta(&mut state.messages, event)?,
         Event::ReasoningStart(_) | Event::ReasoningEnd(_) => {}
         Event::ReasoningMessageStart(event) => {
-            if !state
+            let message = if let Some(existing) = state
                 .messages
-                .iter()
-                .any(|message| message.id() == event.message_id)
+                .iter_mut()
+                .find(|message| message.id() == event.message_id)
             {
-                state.messages.push(Message::Reasoning(ReasoningMessage {
-                    id: event.message_id.clone(),
-                    content: String::new(),
-                    encrypted_value: None,
-                    subagent_run_id: event.attributable.subagent_run_id.clone(),
-                    metadata: None,
-                }));
-            }
+                existing
+            } else {
+                state
+                    .messages
+                    .push(Message::Reasoning(ReasoningMessage {
+                        id: event.message_id.clone(),
+                        content: String::new(),
+                        encrypted_value: None,
+                        subagent_run_id: event.attributable.subagent_run_id.clone(),
+                        metadata: None,
+                    }));
+                state.messages.last_mut().expect("just pushed")
+            };
+            merge_event_metadata(message_metadata_mut(message), event.base.metadata.as_ref());
         }
         Event::ReasoningMessageContent(event) => {
             let message = state
@@ -167,6 +242,10 @@ pub fn apply_event(state: &mut ApplyState, event: &Event) -> Result<()> {
                     ))
                 })?;
             append_reasoning_content(message, &event.delta)?;
+            merge_event_metadata(
+                message_metadata_mut(message),
+                event.base.metadata.as_ref(),
+            );
         }
         Event::ReasoningMessageEnd(_) => {}
         Event::ReasoningEncryptedValue(event) => apply_reasoning_encrypted_value(
@@ -309,6 +388,7 @@ fn apply_tool_call_start(messages: &mut Vec<Message>, event: &ToolCallStartEvent
             );
             tool_call.function.name = event.tool_call_name.clone();
         }
+        merge_event_metadata(&mut tool_call.metadata, event.base.metadata.as_ref());
         return Ok(());
     }
 
@@ -319,19 +399,21 @@ fn apply_tool_call_start(messages: &mut Vec<Message>, event: &ToolCallStartEvent
         event.attributable.subagent_run_id.clone(),
     );
     let assistant = assistant_message_mut(&mut messages[index])?;
+    let mut new_tool_call = ToolCall {
+        id: event.tool_call_id.clone(),
+        kind: ToolCallKind::Function,
+        function: FunctionCall {
+            name: event.tool_call_name.clone(),
+            arguments: String::new(),
+        },
+        encrypted_value: None,
+        metadata: None,
+    };
+    merge_event_metadata(&mut new_tool_call.metadata, event.base.metadata.as_ref());
     assistant
         .tool_calls
         .get_or_insert_with(Vec::new)
-        .push(ToolCall {
-            id: event.tool_call_id.clone(),
-            kind: ToolCallKind::Function,
-            function: FunctionCall {
-                name: event.tool_call_name.clone(),
-                arguments: String::new(),
-            },
-            encrypted_value: None,
-            metadata: None,
-        });
+        .push(new_tool_call);
 
     Ok(())
 }
@@ -339,6 +421,72 @@ fn apply_tool_call_start(messages: &mut Vec<Message>, event: &ToolCallStartEvent
 /// Package-owned metadata namespace carrying the authority declaration.
 /// Mirrors `activity-history.ts:3` upstream.
 const ACTIVITY_HISTORY_METADATA: &str = "@ag-ui/client";
+
+/// Adds a projector scope to an incoming `MESSAGES_SNAPSHOT`, preserving full
+/// authority (`activity-history.ts:32-53`).
+///
+/// History projectors must call this on the snapshot *before* replacing its
+/// messages so inferred authority describes the original set. A declared
+/// `null` scope stays `null`; a scope inferred from the original activity
+/// contents becomes `null`; an explicit array unions the requested types into
+/// it (deduplicated, in first-seen order).
+pub fn with_authoritative_activity_types(
+    event: &MessagesSnapshotEvent,
+    activity_types: &[String],
+) -> MessagesSnapshotEvent {
+    let mut event = event.clone();
+
+    let prior = event
+        .base
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get(ACTIVITY_HISTORY_METADATA))
+        .cloned();
+    let prior = prior.as_ref().and_then(|prior| prior.as_object());
+
+    let scope = authoritative_activity_types(&event);
+    let owns_all = scope == Some(None)
+        || (scope.is_none()
+            && event
+                .messages
+                .iter()
+                .any(|m| matches!(m, Message::Activity(_))));
+
+    let mut scope_value = match prior {
+        // Keep the other keys the producer left in the namespace.
+        Some(prior) => prior.clone(),
+        None => serde_json::Map::new(),
+    };
+    if owns_all {
+        scope_value.insert("authoritativeActivityTypes".into(), Value::Null);
+    } else {
+        let existing_types: Vec<String> = match scope {
+            Some(Some(types)) => types,
+            _ => Vec::new(),
+        };
+        let mut unioned: Vec<Value> = existing_types
+            .iter()
+            .map(|ty| Value::String(ty.clone()))
+            .collect();
+        for ty in activity_types {
+            if !unioned.contains(&Value::String(ty.clone())) {
+                unioned.push(Value::String(ty.clone()));
+            }
+        }
+        scope_value.insert("authoritativeActivityTypes".into(), Value::Array(unioned));
+    }
+
+    let mut metadata = match event.base.metadata.take() {
+        Some(Value::Object(metadata)) => metadata,
+        // An invalid non-object metadata carries nothing we would clobber; the
+        // upstream spread into an object replaces it wholesale.
+        _ => serde_json::Map::new(),
+    };
+    metadata.insert(ACTIVITY_HISTORY_METADATA.into(), Value::Object(scope_value));
+    event.base.metadata = Some(Value::Object(metadata));
+
+    event
+}
 
 /// The activity types this snapshot is authoritative for.
 ///
@@ -456,6 +604,10 @@ fn apply_activity_snapshot(messages: &mut Vec<Message>, event: &ActivitySnapshot
         subagent_run_id: event.attributable.subagent_run_id.clone(),
         metadata: None,
     };
+    // Metadata is folded into the merge target *after* resolution, so a
+    // replace keeps the accumulated keys and adds the event's on top
+    // (upstream merges into `mergeTarget`, `apply/default.ts:905`).
+    merge_event_metadata(&mut activity_message.metadata, event.base.metadata.as_ref());
 
     // Absent `replace` means replace: the snapshot is the authoritative
     // content for the activity it names.
@@ -473,6 +625,7 @@ fn apply_activity_snapshot(messages: &mut Vec<Message>, event: &ActivitySnapshot
                 // the metadata built up so far."* Attribution is the exception
                 // upstream re-mints and we re-take it above.
                 activity_message.metadata = existing.metadata.clone();
+                merge_event_metadata(&mut activity_message.metadata, event.base.metadata.as_ref());
                 messages[index] = Message::Activity(activity_message);
             }
             Message::Activity(_) => {}
@@ -493,9 +646,14 @@ fn apply_activity_delta(messages: &mut [Message], event: &ActivityDeltaEvent) ->
         return Ok(());
     };
 
-    let Message::Activity(existing) = &messages[index] else {
+    // Metadata does not depend on the patch succeeding — a stale path should
+    // not cost the message its usage or trace keys — so merge it into the
+    // message before attempting the patch and leave it there either way
+    // (`apply/default.ts:962-966`).
+    let Some(Message::Activity(existing)) = messages.get_mut(index) else {
         return Ok(());
     };
+    merge_event_metadata(&mut existing.metadata, event.base.metadata.as_ref());
 
     // RFC 6902 against the activity's content, same `json_patch::patch` the
     // state reducer uses. A failed patch is announced and the prior content
@@ -1196,6 +1354,179 @@ mod tests {
             );
         }
 
+        mod with_authoritative_activity_types_tests {
+            use super::*;
+
+            fn snapshot_event(messages: Vec<Message>) -> MessagesSnapshotEvent {
+                MessagesSnapshotEvent {
+                    messages,
+                    base: agui_rs_core::BaseEventFields::default(),
+                }
+            }
+
+            fn activity(id: &str, activity_type: &str) -> Message {
+                Message::Activity(ActivityMessage {
+                    id: id.into(),
+                    activity_type: activity_type.into(),
+                    content: serde_json::Map::new(),
+                    subagent_run_id: None,
+                    metadata: None,
+                })
+            }
+
+            fn declaration(event: &MessagesSnapshotEvent) -> Value {
+                event.base.metadata.as_ref().expect("metadata set")[ACTIVITY_HISTORY_METADATA]
+                    .clone()
+            }
+
+            /// The upstream round-trip: what `with_..` writes,
+            /// `authoritative_activity_types` reads back. The unmarked
+            /// transcript carries no activity, so no inferred full authority
+            /// fires and the projector's list is the declaration
+            /// (activity-history.test.ts:46 + :97-108).
+            #[test]
+            fn writes_a_scope_the_reader_round_trips() {
+                let event = snapshot_event(vec![]);
+                let extended =
+                    with_authoritative_activity_types(&event, &["projected".to_string()]);
+                assert_eq!(
+                    authoritative_activity_types(&extended),
+                    Some(Some(vec!["projected".to_string()]))
+                );
+            }
+
+            #[test]
+            fn unmarked_transcript_gets_only_the_projector_scope() {
+                // activity-history.test.ts:97-108
+                let event = snapshot_event(vec![]);
+                let extended =
+                    with_authoritative_activity_types(&event, &["projected".to_string()]);
+                assert_eq!(
+                    declaration(&extended),
+                    json!({"authoritativeActivityTypes": ["projected"]})
+                );
+            }
+
+            /// An unmarked snapshot carrying activity owns everything; the
+            /// projector preserves that full authority (activity-history.test.ts:91-95).
+            #[test]
+            fn inferred_full_authority_is_preserved_as_null() {
+                let event = snapshot_event(vec![activity("foreign", "foreign")]);
+                let extended =
+                    with_authoritative_activity_types(&event, &["projected".to_string()]);
+                assert_eq!(
+                    declaration(&extended),
+                    json!({"authoritativeActivityTypes": null})
+                );
+                assert_eq!(authoritative_activity_types(&extended), Some(None));
+            }
+
+            #[test]
+            fn explicit_null_stays_null_regardless_of_contents() {
+                // activity-history.test.ts:78-89
+                let mut event = snapshot_event(vec![]);
+                event.base.metadata = Some(json!({
+                    "@ag-ui/client": {"authoritativeActivityTypes": null}
+                }));
+                let extended =
+                    with_authoritative_activity_types(&event, &["projected".to_string()]);
+                assert_eq!(authoritative_activity_types(&extended), Some(None));
+            }
+
+            #[test]
+            fn unions_scopes_deduplicated_in_first_seen_order() {
+                // activity-history.test.ts:51-76
+                let mut event = snapshot_event(vec![activity("foreign", "foreign")]);
+                event.base.metadata = Some(json!({
+                    "@ag-ui/client": {
+                        "other": "keep",
+                        "authoritativeActivityTypes": ["first"]
+                    },
+                    "trace": {"id": "keep"}
+                }));
+                let requested = vec!["second".to_string(), "first".to_string()];
+                let extended = with_authoritative_activity_types(&event, &requested);
+                assert_eq!(
+                    declaration(&extended),
+                    json!({
+                        "other": "keep",
+                        "authoritativeActivityTypes": ["first", "second"]
+                    })
+                );
+                // Idempotent: extending again changes nothing.
+                let again = with_authoritative_activity_types(&extended, &requested);
+                assert_eq!(again, extended);
+                // The input is not mutated.
+                assert_eq!(
+                    event.base.metadata.as_ref().unwrap()["@ag-ui/client"]
+                        ["authoritativeActivityTypes"],
+                    json!(["first"])
+                );
+            }
+
+            /// A present-but-invalid declaration owns nothing, so the projector's
+            /// types land on top of an empty scope (activity-history.test.ts:41-49).
+            #[test]
+            fn invalid_declaration_grants_nothing_but_extends_fine() {
+                let mut event = snapshot_event(vec![activity("foreign", "foreign")]);
+                event.base.metadata = Some(json!({
+                    "@ag-ui/client": {"authoritativeActivityTypes": "owned"}
+                }));
+                let extended =
+                    with_authoritative_activity_types(&event, &["projected".to_string()]);
+                assert_eq!(
+                    authoritative_activity_types(&extended),
+                    Some(Some(vec!["projected".to_string()]))
+                );
+            }
+
+            /// Extending an explicit empty scope works even though the snapshot
+            /// carries activity (activity-history.test.ts:110-119).
+            #[test]
+            fn extends_an_explicit_empty_scope_despite_activity() {
+                let mut event = snapshot_event(vec![activity("foreign", "foreign")]);
+                event.base.metadata = Some(json!({
+                    "@ag-ui/client": {"authoritativeActivityTypes": []}
+                }));
+                let extended =
+                    with_authoritative_activity_types(&event, &["projected".to_string()]);
+                assert_eq!(
+                    authoritative_activity_types(&extended),
+                    Some(Some(vec!["projected".to_string()]))
+                );
+            }
+
+            /// End-to-end: the projector marks the types it reconstructed on an
+            /// unmarked, activity-carrying snapshot — wait, an unmarked one
+            /// carrying activity owns everything already; the useful e2e is the
+            /// explicit-scope one. Mark the types, then a later transcript-only
+            /// snapshot deletes the declared type but spares the undeclared one.
+            #[test]
+            fn marked_snapshot_deletes_declared_types_and_spares_undeclared() {
+                let mut event = snapshot_event(vec![]);
+                event.base.metadata = Some(json!({
+                    "@ag-ui/client": {"authoritativeActivityTypes": []}
+                }));
+                let projected =
+                    with_authoritative_activity_types(&event, &["projected".to_string()]);
+
+                let mut state = ApplyState {
+                    messages: vec![activity("a-own", "projected"), activity("a-keep", "chat")],
+                    state: Value::Null,
+                };
+                apply_event(
+                    &mut state,
+                    &Event::MessagesSnapshot(MessagesSnapshotEvent {
+                        messages: vec![],
+                        base: projected.base.clone(),
+                    }),
+                )
+                .unwrap();
+                let ids: Vec<&str> = state.messages.iter().map(|m| m.id()).collect();
+                assert_eq!(ids, vec!["a-keep"]);
+            }
+        }
+
         /// Existing positions are preserved; ids the client has not seen are
         /// appended in snapshot order.
         #[test]
@@ -1230,6 +1561,367 @@ mod tests {
             let ids: Vec<String> = state.messages.iter().map(|m| m.id().to_string()).collect();
             assert_eq!(ids, vec!["m1", "m3"]);
             assert_eq!(state.messages[0], assistant("m1", "one!"));
+        }
+    }
+
+    mod metadata_merge {
+        use super::*;
+        use agui_rs_core::{
+            ReasoningMessageStartEvent, StateSnapshotEvent, ToolCallResultEvent, ToolResultRole,
+        };
+
+        fn metadata_event(metadata: Value) -> agui_rs_core::BaseEventFields {
+            agui_rs_core::BaseEventFields {
+                metadata: Some(metadata),
+                ..Default::default()
+            }
+        }
+
+        #[test]
+        fn merges_key_by_key_with_last_write_winning() {
+            let mut target = Some(json!({"a": 1, "b": 2}).as_object().unwrap().clone());
+            merge_event_metadata(&mut target, Some(&json!({"b": 3, "c": 4, "a": null})));
+            assert_eq!(
+                target.map(Value::Object),
+                Some(json!({"a": null, "b": 3, "c": 4}))
+            );
+        }
+
+        #[test]
+        fn replaces_outright_without_recursing() {
+            // metadata.test.ts:185: an array under a key is swapped, not blended.
+            let mut target = Some(
+                json!({"tags": ["a", "b", "c"]})
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            );
+            merge_event_metadata(&mut target, Some(&json!({"tags": ["z"]})));
+            assert_eq!(target.map(Value::Object), Some(json!({"tags": ["z"]})));
+        }
+
+        #[test]
+        fn absent_incoming_leaves_existing_and_vice_versa() {
+            let existing = json!({"a": 1}).as_object().unwrap().clone();
+            let mut target = Some(existing.clone());
+            merge_event_metadata(&mut target, None);
+            assert_eq!(target, Some(existing));
+
+            let mut target = None;
+            merge_event_metadata(&mut target, Some(&json!({"a": 1})));
+            assert_eq!(target.map(Value::Object), Some(json!({"a": 1})));
+        }
+
+        /// Upstream ignores run-, step- and state-level event metadata
+        /// (`apply/default.ts:104-106`); ours only folds where the upstream
+        /// `applyEventMetadata` calls do.
+        #[test]
+        fn run_level_event_metadata_does_not_pollute_messages() {
+            let state = apply_all(vec![
+                Event::TextMessageStart(agui_rs_core::TextMessageStartEvent {
+                    message_id: "m1".into(),
+                    role: TextMessageRole::Assistant,
+                    attributable: AttributableFields::default(),
+                    name: None,
+                    base: metadata_event(json!({"source": "run"})),
+                }),
+                Event::StateSnapshot(StateSnapshotEvent {
+                    snapshot: json!({}),
+                    attributable: AttributableFields::default(),
+                    base: metadata_event(json!({"snap": true})),
+                }),
+                Event::StepStarted(agui_rs_core::StepStartedEvent {
+                    step_name: "s".into(),
+                    base: metadata_event(json!({"step": true})),
+                    attributable: AttributableFields::default(),
+                }),
+            ]);
+
+            let Message::Assistant(message) = &state.messages[0] else {
+                panic!("expected assistant message");
+            };
+            assert_eq!(
+                message.metadata.as_ref().map(|m| Value::Object(m.clone())),
+                Some(json!({"source": "run"}))
+            );
+        }
+
+        #[test]
+        fn text_message_lifecycle_accumulates_event_metadata() {
+            let state = apply_all(vec![
+                Event::TextMessageStart(agui_rs_core::TextMessageStartEvent {
+                    message_id: "m1".into(),
+                    role: TextMessageRole::Assistant,
+                    attributable: AttributableFields::default(),
+                    name: None,
+                    base: metadata_event(json!({"trace": "t-1"})),
+                }),
+                agui_rs_core::factory::text_message_content("m1", "hi"),
+                Event::TextMessageEnd(agui_rs_core::TextMessageEndEvent {
+                    message_id: "m1".into(),
+                    // The end event is where usage typically arrives.
+                    base: metadata_event(json!({"usage": {"tokens": 7}})),
+                    attributable: AttributableFields::default(),
+                }),
+            ]);
+
+            let Message::Assistant(message) = &state.messages[0] else {
+                panic!("expected assistant message");
+            };
+            assert_eq!(
+                message.metadata.as_ref().map(|m| Value::Object(m.clone())),
+                Some(json!({"trace": "t-1", "usage": {"tokens": 7}}))
+            );
+        }
+
+        #[test]
+        fn events_without_metadata_leave_message_metadata_untouched() {
+            let state = apply_all(vec![
+                Event::TextMessageStart(agui_rs_core::TextMessageStartEvent {
+                    message_id: "m1".into(),
+                    role: TextMessageRole::Assistant,
+                    attributable: AttributableFields::default(),
+                    name: None,
+                    base: agui_rs_core::BaseEventFields::default(),
+                }),
+                agui_rs_core::factory::text_message_content("m1", "hi"),
+            ]);
+
+            let Message::Assistant(message) = &state.messages[0] else {
+                panic!("expected assistant message");
+            };
+            assert_eq!(message.metadata, None);
+        }
+
+        /// A message carried in from a previous run keeps its keys; the stream
+        /// only adds on top.
+        #[test]
+        fn streamed_metadata_merges_into_existing_message_metadata() {
+            let mut state = ApplyState {
+                messages: vec![Message::Assistant(AssistantMessage {
+                    id: "m1".into(),
+                    metadata: Some(json!({"kept": true}).as_object().unwrap().clone()),
+                    subagent_run_id: None,
+                    content: Some(String::new()),
+                    name: None,
+                    tool_calls: None,
+                    encrypted_value: None,
+                })],
+                state: Value::Null,
+            };
+            apply_event(
+                &mut state,
+                &Event::TextMessageContent(agui_rs_core::TextMessageContentEvent {
+                    message_id: "m1".into(),
+                    delta: "x".into(),
+                    base: metadata_event(json!({"added": 1})),
+                    attributable: AttributableFields::default(),
+                }),
+            )
+            .unwrap();
+
+            let Message::Assistant(message) = &state.messages[0] else {
+                panic!("expected assistant message");
+            };
+            assert_eq!(
+                message.metadata.as_ref().map(|m| Value::Object(m.clone())),
+                Some(json!({"kept": true, "added": 1}))
+            );
+        }
+
+        #[test]
+        fn tool_call_events_fold_into_the_tool_call_not_the_parent() {
+            let state = apply_all(vec![
+                Event::ToolCallStart(ToolCallStartEvent {
+                    tool_call_id: "tc1".into(),
+                    tool_call_name: "search".into(),
+                    parent_message_id: Some("m1".into()),
+                    base: metadata_event(json!({"started": true})),
+                    attributable: AttributableFields::default(),
+                }),
+                agui_rs_core::factory::tool_call_args("tc1", "{}"),
+                agui_rs_core::factory::tool_call_end("tc1"),
+            ]);
+
+            let Message::Assistant(message) = &state.messages[0] else {
+                panic!("expected assistant message");
+            };
+            assert_eq!(message.metadata, None, "the parent stays clean");
+            let tool_call = &message.tool_calls.as_ref().expect("tool calls")[0];
+            assert_eq!(
+                tool_call
+                    .metadata
+                    .as_ref()
+                    .map(|m| Value::Object(m.clone())),
+                Some(json!({"started": true}))
+            );
+        }
+
+        #[test]
+        fn tool_result_folds_into_the_tool_message() {
+            let state = apply_all(vec![Event::ToolCallResult(ToolCallResultEvent {
+                message_id: "tm-1".into(),
+                tool_call_id: "tc-1".into(),
+                content: "ok".into(),
+                attributable: AttributableFields::default(),
+                role: Some(ToolResultRole::Tool),
+                base: metadata_event(json!({"latency_ms": 42})),
+            })]);
+
+            let Message::Tool(message) = &state.messages[0] else {
+                panic!("expected tool message");
+            };
+            assert_eq!(
+                message.metadata.as_ref().map(|m| Value::Object(m.clone())),
+                Some(json!({"latency_ms": 42}))
+            );
+        }
+
+        #[test]
+        fn reasoning_message_events_fold_into_the_reasoning_message() {
+            let state = apply_all(vec![
+                Event::ReasoningMessageStart(ReasoningMessageStartEvent {
+                    message_id: "r1".into(),
+                    role: agui_rs_core::ReasoningMessageRole::Reasoning,
+                    attributable: AttributableFields::default(),
+                    base: metadata_event(json!({"trace": "r"})),
+                }),
+                Event::ReasoningMessageContent(agui_rs_core::ReasoningMessageContentEvent {
+                    message_id: "r1".into(),
+                    delta: "x".into(),
+                    base: metadata_event(json!({"tokens": 3})),
+                    attributable: AttributableFields::default(),
+                }),
+            ]);
+
+            let Message::Reasoning(message) = &state.messages[0] else {
+                panic!("expected reasoning message");
+            };
+            assert_eq!(
+                message.metadata.as_ref().map(|m| Value::Object(m.clone())),
+                Some(json!({"trace": "r", "tokens": 3}))
+            );
+        }
+
+        #[test]
+        fn activity_snapshot_carries_event_metadata() {
+            let state = apply_all(vec![Event::ActivitySnapshot(ActivitySnapshotEvent {
+                message_id: "a1".into(),
+                activity_type: "plan".into(),
+                content: serde_json::Map::new(),
+                replace: Some(true),
+                base: metadata_event(json!({"usage": {"tokens": 9}})),
+                attributable: AttributableFields::default(),
+            })]);
+
+            let Message::Activity(message) = &state.messages[0] else {
+                panic!("expected activity message");
+            };
+            assert_eq!(
+                message.metadata.as_ref().map(|m| Value::Object(m.clone())),
+                Some(json!({"usage": {"tokens": 9}}))
+            );
+        }
+
+        /// The activity-retention fix and the new fold compose: the replace
+        /// keeps the accumulated keys and adds the snapshot's on top.
+        #[test]
+        fn activity_snapshot_replace_keeps_accumulated_and_adds_event_metadata() {
+            let mut state = ApplyState {
+                messages: vec![Message::Activity(ActivityMessage {
+                    id: "a1".into(),
+                    metadata: Some(
+                        json!({"@ag-ui/client": {"other": 1}})
+                            .as_object()
+                            .unwrap()
+                            .clone(),
+                    ),
+                    subagent_run_id: None,
+                    activity_type: "plan".into(),
+                    content: serde_json::Map::new(),
+                })],
+                state: Value::Null,
+            };
+            apply_event(
+                &mut state,
+                &Event::ActivitySnapshot(ActivitySnapshotEvent {
+                    message_id: "a1".into(),
+                    activity_type: "execute".into(),
+                    content: serde_json::Map::new(),
+                    replace: None,
+                    base: metadata_event(json!({"usage": {"tokens": 2}})),
+                    attributable: AttributableFields::default(),
+                }),
+            )
+            .unwrap();
+
+            let Message::Activity(message) = &state.messages[0] else {
+                panic!("expected activity message");
+            };
+            assert_eq!(
+                message.metadata.as_ref().map(|m| Value::Object(m.clone())),
+                Some(json!({
+                    "@ag-ui/client": {"other": 1},
+                    "usage": {"tokens": 2}
+                }))
+            );
+        }
+
+        /// Upstream merges before patching so a stale path still costs nothing
+        /// but the patch (`apply/default.ts:962-966`).
+        #[test]
+        fn activity_delta_folds_metadata_even_when_the_patch_is_stale() {
+            let state = apply_all(vec![
+                Event::ActivitySnapshot(ActivitySnapshotEvent {
+                    message_id: "a1".into(),
+                    activity_type: "plan".into(),
+                    content: serde_json::Map::new(),
+                    replace: Some(true),
+                    base: agui_rs_core::BaseEventFields::default(),
+                    attributable: AttributableFields::default(),
+                }),
+                Event::ActivityDelta(ActivityDeltaEvent {
+                    message_id: "a1".into(),
+                    activity_type: "plan".into(),
+                    patch: vec![json!({"op": "replace", "path": "/nope", "value": "x"})],
+                    base: metadata_event(json!({"seen": true})),
+                    attributable: AttributableFields::default(),
+                }),
+            ]);
+
+            let Message::Activity(message) = &state.messages[0] else {
+                panic!("expected activity message");
+            };
+            assert_eq!(
+                message.metadata.as_ref().map(|m| Value::Object(m.clone())),
+                Some(json!({"seen": true})),
+                "metadata lands despite the stale patch"
+            );
+        }
+
+        #[test]
+        fn messages_snapshot_metadata_is_declared_authority_not_message_metadata() {
+            // The snapshot's own metadata never lands on its messages; only the
+            // "@ag-ui/client" namespace is read, for authority (the reading-side
+            // test above covers that). Here: a plain trace key changes nothing
+            // on the messages it carries.
+            let state = apply_all(vec![Event::MessagesSnapshot(MessagesSnapshotEvent {
+                messages: vec![Message::Assistant(AssistantMessage {
+                    id: "m1".into(),
+                    metadata: None,
+                    subagent_run_id: None,
+                    content: Some("hi".into()),
+                    name: None,
+                    tool_calls: None,
+                    encrypted_value: None,
+                })],
+                base: metadata_event(json!({"trace": "snapshot"})),
+            })]);
+
+            let Message::Assistant(message) = &state.messages[0] else {
+                panic!("expected assistant message");
+            };
+            assert_eq!(message.metadata, None);
         }
     }
 

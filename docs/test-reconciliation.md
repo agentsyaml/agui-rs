@@ -113,7 +113,7 @@ Every command below was run and produced the number quoted above.
      | rg -o 'test result: ok\. \d+ passed' | rg -o '\d+' | awk '{s+=$1}END{print s}'
    # → 1326
    ```
-4. **Rust distinct test fns per crate**:
+2. **Rust distinct test fns per crate**:
    ```sh
    for c in agui-rs-core agui-rs-client agui-rs-encoder agui-rs-proto agui-rs-server; do
      printf '%-20s ' "$c"
@@ -124,7 +124,7 @@ Every command below was run and produced the number quoted above.
    For `agui-rs-core` add the macro delta: `rg -c '#\[test\]' crates/agui-rs-core/src`
    = 65, of which one is the `factory_test!` body expanding 30 times →
    `65 − 1 + 30 = 94` lib tests, `+ 69` integration = **163**.
-5. **The `#[path]` duplication table**: `cargo test --workspace 2>&1` and pair
+3. **The `#[path]` duplication table**: `cargo test --workspace 2>&1` and pair
    each `Running tests/<name>.rs` line with its `test result:` line, then
    subtract `rg -c '#\[(tokio::)?test\]' crates/agui-rs-client/tests/<name>.rs`.
 
@@ -188,7 +188,7 @@ upper bound for that TS file, not as a per-file attribution.
 5. **`enforce` stage** — `client/src/enforce.rs` reads the frozen 1.0
    `schema.json` at compile time to build its known-shape table; no
    hand-maintained duplicate. 5 test fns.
-6. **Encoder content negotiation** — `EventEncoder::with_accept` rewritten to
+4. **Encoder content negotiation** — `EventEncoder::with_accept` rewritten to
    mirror `media-type.ts` (`*/*` and `application/*` select protobuf, `q=0`
    vetoes, specificity outranks `q`). 8 test fns.
 
@@ -227,23 +227,16 @@ Verified against the 1.0.0 checkout. Ordered by size.
    innermost wire layer, before any middleware can see a raw event. Same
    enforcement, different position; a middleware that expects to normalise a
    shape before validation cannot.
-2. **`mergeMetadata` not ported.** `core/src/metadata.ts` exports it and
-   `apply/default.ts:131` calls it on every event to merge `event.metadata`
-   onto the target message. No Rust equivalent (`rg merge_metadata crates/` →
-   nothing), so event-level metadata never reaches the message list.
-3. **Activity-history projector scope.** `withAuthoritativeActivityTypes` (the
-   scope union that stamps `@ag-ui/client` onto an unmarked transcript) is not
-   ported; only the read side is.
-4. **Peer-ceiling defect detection.** Rust has the ceiling and the deprecation
+2. **Peer-ceiling defect detection.** Rust has the ceiling and the deprecation
    note but not the JS instance-field override diagnostic (5 TS cases,
    JS-runtime only).
-5. **Subscriber mutation model** — `stopPropagation` + `AgentStateMutation`
+3. **Subscriber mutation model** — `stopPropagation` + `AgentStateMutation`
     chaining. Rust hooks return `Result` / `Option<replacement>`. Registry,
     ordering, temporary subscribers and replacement chaining *are* implemented;
     only the JS mutation-object contract is intentionally not adopted.
-6. **`events$` replay subject / `detachActiveRun()`** — RxJS-specific; no
+4. **`events$` replay subject / `detachActiveRun()`** — RxJS-specific; no
     `futures::Stream` analogue. Cancellation is covered by `AbortHandle`.
-7. **Per-stream-stage `DebugLogger` logging** — `[VERIFY]`/`[SSE]`/
+5. **Per-stream-stage `DebugLogger` logging** — `[VERIFY]`/`[SSE]`/
     `[TRANSFORM]`/`[CHUNK]` console capture. Lifecycle logging
     (    `AgentConfig::debug`) is done; 39 `// SKIPPED:` markers across
     `chunks_transform_debug.rs` (10), `verify_debug.rs` (7),
@@ -251,11 +244,11 @@ Verified against the 1.0.0 checkout. Ordered by size.
     `agent_http.rs`, `agent_lifecycle.rs`, `agent_result.rs`,
     `agent_concurrent.rs`, `transform_http.rs`, `legacy_bridged.rs`
     (2 each) record it.
-8. **JS-runtime / zod-runtime-only cases** — frozen inputs, `process
+6. **JS-runtime / zod-runtime-only cases** — frozen inputs, `process
     undefined`, ESM interop, bundle-has-no-zod, two-zod-copies,
     zod-3.25 literals, and the 20-case SSE-vs-protobuf transport-parity
     differential.
-9. **The compatibility boundary's OUTBOUND half.** Upstream
+7. **The compatibility boundary's OUTBOUND half.** Upstream
     `CompatibilityBoundary.run` rewrites the `RunAgentInput` it is about to
     send (`compatibility-boundary.ts:177`, `input.messages =
     input.messages.map(upgradeMessageContent)`) and the module doc notes
@@ -266,7 +259,7 @@ Verified against the 1.0.0 checkout. Ordered by size.
     `Binary` variant, and the type stays a `Json` value in `RunAgentInput`,
     so the shape has to be hand-written JSON. The inbound direction — the one
     that killed a run outright — is implemented.
-10. **`normalizeLegacyRunAgentInput` for non-event request parsing.** Upstream
+8. **`normalizeLegacyRunAgentInput` for non-event request parsing.** Upstream
     marks it `@internal` and states the scope itself
     (`compatibility-boundary.ts:71-78`): *"Used internally for
     `RUN_STARTED.input`; direct server request parsers do not pass through this
@@ -303,6 +296,22 @@ total: 45 in `agui-rs-client`, 3 in `agui-rs-core`).
    `token_usage_from_lang_chain_metadata` and `aggregate_token_usage`, with the
    AG-UI-keyed warning text. These are SDK interop helpers rather than wire
    schema, and Rust has no AI-SDK/LangChain caller for them — ported for parity.
+
+6. **`mergeMetadata`** (`core/src/metadata.rs`, `apply.rs`,
+   `compact.rs`). Folds `event.metadata` onto the message or tool call a
+   reducer event builds, at the upstream call sites (`apply/default.ts:270,
+   319, 365, 435, 466, 529, 587, 636, 905, 965`) but not onto run, step,
+   state, raw or custom events (`default.ts:104-106`). Last write wins, values
+   are replaced wholesale rather than recursed into. Compaction folds it too
+   (`compact.ts:49, 71, 133, 148, 183, 198, 445`), including the
+   `carryStartMetadata` / `replaceStartFields` split that keeps a replayed
+   start's metadata from jumping ahead of the collapsed delta it belongs to.
+7. **`with_authoritative_activity_types`**
+   (`apply.rs`, upstream `activity-history.ts:32-53`). A free function over
+   `MessagesSnapshotEvent`, not an agent builder option: an absent declaration
+   is left absent, an inferred full authority becomes absent, and otherwise the
+   requested types are unioned into the read scope, first-appearance order,
+   deduplicated.
 
 ## `[未核实]`
 

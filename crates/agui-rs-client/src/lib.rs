@@ -26,7 +26,7 @@ mod version;
 pub use agent::{
     AbortHandle, Agent, AgentConfig, AgentRunner, RunAgentParameters, RunAgentResult, Subscription,
 };
-pub use apply::{default_apply_events, AppliedEvent};
+pub use apply::{default_apply_events, with_authoritative_activity_types, AppliedEvent};
 pub use chunks::expand_chunks;
 pub use compact::compact_events;
 pub use debug_logger::DebugLogger;
