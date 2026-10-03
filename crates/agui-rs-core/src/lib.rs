@@ -9,6 +9,7 @@ pub mod capabilities;
 pub mod error;
 pub mod event_factories;
 pub mod events;
+pub mod token_usage;
 pub mod types;
 
 /// The IANA-style media type for AG-UI events encoded as protobuf.
@@ -35,6 +36,9 @@ pub use events::{
     SubagentStartedEvent, TextMessageChunkEvent, TextMessageContentEvent, TextMessageEndEvent,
     TextMessageStartEvent, TokenUsage, ToolCallArgsEvent, ToolCallChunkEvent, ToolCallEndEvent,
     ToolCallResultEvent, ToolCallStartEvent, ToolResultRole,
+};
+pub use token_usage::{
+    aggregate_token_usage, token_usage_from_ai_sdk_usage, token_usage_from_lang_chain_metadata,
 };
 pub use types::{
     BinaryInputContent, ContentPart, Context, FunctionCall, Interrupt, Message, PartSource,

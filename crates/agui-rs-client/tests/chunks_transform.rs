@@ -4,8 +4,8 @@ use agui_rs_core::{
         create_raw_event, create_text_message_chunk_event, create_tool_call_chunk_event,
     },
     factory, AgUiError, AttributableFields, BaseEventFields, Event, RawEvent,
-    TextMessageContentEvent, TextMessageEndEvent, TextMessageRole, TextMessageStartEvent,
-    ToolCallArgsEvent, ToolCallEndEvent, ToolCallStartEvent,
+    TextMessageChunkEvent, TextMessageContentEvent, TextMessageEndEvent, TextMessageRole,
+    TextMessageStartEvent, ToolCallArgsEvent, ToolCallEndEvent, ToolCallStartEvent,
 };
 use futures::{stream, StreamExt};
 use serde_json::json;
@@ -758,13 +758,15 @@ async fn raw_event_does_not_close_pending_text_message() {
     ])
     .await;
 
+    // The RAW event does not close the pending message, and a stream that ends
+    // without a run terminal synthesizes no END (TS `finalize` discards the
+    // events it builds — transform.ts:951-958).
     assert_eq!(
         events,
         vec![
             text_start("msg-123", TextMessageRole::Assistant, None),
             text_content("msg-123", "Hello"),
             raw_event,
-            text_end("msg-123"),
         ]
     );
 }
@@ -837,4 +839,300 @@ async fn tool_call_result_closes_pending_text_message() {
             result_event,
         ]
     );
+}
+
+// === subagentRunId propagation (TS chunks/__tests__/subagent-chunks.test.ts) ===
+
+fn chunk_attributable(subagent_run_id: Option<&str>) -> AttributableFields {
+    AttributableFields {
+        subagent_run_id: subagent_run_id.map(str::to_string),
+    }
+}
+
+fn attributed_text_chunk(
+    message_id: Option<&str>,
+    delta: &str,
+    subagent_run_id: Option<&str>,
+) -> Event {
+    Event::TextMessageChunk(TextMessageChunkEvent {
+        message_id: message_id.map(str::to_string),
+        role: None,
+        attributable: chunk_attributable(subagent_run_id),
+        delta: Some(delta.to_string()),
+        name: None,
+        base: BaseEventFields::default(),
+    })
+}
+
+fn text_start_owned(message_id: &str, subagent_run_id: Option<&str>) -> Event {
+    Event::TextMessageStart(TextMessageStartEvent {
+        message_id: message_id.to_string(),
+        role: TextMessageRole::Assistant,
+        name: None,
+        base: BaseEventFields::default(),
+        attributable: chunk_attributable(subagent_run_id),
+    })
+}
+
+fn text_content_owned(message_id: &str, delta: &str, subagent_run_id: Option<&str>) -> Event {
+    Event::TextMessageContent(TextMessageContentEvent {
+        message_id: message_id.to_string(),
+        delta: delta.to_string(),
+        base: BaseEventFields::default(),
+        attributable: chunk_attributable(subagent_run_id),
+    })
+}
+
+fn text_end_owned(message_id: &str, subagent_run_id: Option<&str>) -> Event {
+    Event::TextMessageEnd(TextMessageEndEvent {
+        message_id: message_id.to_string(),
+        base: BaseEventFields::default(),
+        attributable: chunk_attributable(subagent_run_id),
+    })
+}
+
+#[tokio::test]
+async fn propagates_subagent_run_id_to_synthesized_start_content_and_end() {
+    // TS subagent-chunks.test.ts "propagate subagentRunId from TEXT_MESSAGE_CHUNK
+    // to synthesized TEXT_MESSAGE_START" + "carry the opener's subagentRunId onto
+    // the synthesized END" + "carry the incoming chunk's subagentRunId onto
+    // synthesized CONTENT".
+    let close_event = factory::run_finished("t", "r");
+    let events = collect_ok(vec![
+        attributed_text_chunk(Some("m1"), "hi", Some("sub-1")),
+        close_event,
+    ])
+    .await;
+
+    assert_eq!(
+        events,
+        vec![
+            text_start_owned("m1", Some("sub-1")),
+            text_content_owned("m1", "hi", Some("sub-1")),
+            text_end_owned("m1", Some("sub-1")),
+            factory::run_finished("t", "r"),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn keeps_interleaved_subagents_open_with_per_lane_assembly() {
+    // TS chunk-lanes.test.ts "keeps both subagents' text messages open when their
+    // chunks interleave": m2's opener must not close m1, and an id-less, tagged
+    // continuation lands back on its own lane.
+    let close_event = factory::run_finished("t", "r");
+    let events = collect_ok(vec![
+        attributed_text_chunk(Some("m1"), "A", Some("s1")),
+        attributed_text_chunk(Some("m2"), "B", Some("s2")),
+        attributed_text_chunk(None, "C", Some("s1")),
+        close_event,
+    ])
+    .await;
+
+    let contents: Vec<_> = events
+        .iter()
+        .filter(|e| matches!(e, Event::TextMessageContent(_)))
+        .collect();
+    assert_eq!(
+        contents,
+        vec![
+            &text_content_owned("m1", "A", Some("s1")),
+            &text_content_owned("m2", "B", Some("s2")),
+            &text_content_owned("m1", "C", Some("s1")),
+        ]
+    );
+    let ends = events
+        .iter()
+        .filter(|e| matches!(e, Event::TextMessageEnd(_)))
+        .count();
+    assert_eq!(ends, 2);
+}
+
+#[tokio::test]
+async fn untagged_continuation_prefers_the_parent_lane() {
+    // TS chunk-lanes.test.ts "keeps the parent's own stream separate from a
+    // subagent's": a chunk with no tag belongs to the parent even while a
+    // subagent's stream is open.
+    let close_event = factory::run_finished("t", "r");
+    let events = collect_ok(vec![
+        attributed_text_chunk(Some("p1"), "P", None),
+        attributed_text_chunk(Some("m1"), "A", Some("s1")),
+        attributed_text_chunk(None, "Q", None),
+        close_event,
+    ])
+    .await;
+
+    let contents: Vec<_> = events
+        .iter()
+        .filter(|e| matches!(e, Event::TextMessageContent(_)))
+        .collect();
+    assert_eq!(
+        contents,
+        vec![
+            &text_content_owned("p1", "P", None),
+            &text_content_owned("m1", "A", Some("s1")),
+            &text_content_owned("p1", "Q", None),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn rejects_a_disagreeing_owner_on_an_open_stream() {
+    // TS subagent-chunks.test.ts "reject an owner change on the same chunk
+    // stream" and "reject an owner change even when the chunk carries no delta".
+    let conflicting = Event::TextMessageChunk(TextMessageChunkEvent {
+        message_id: Some("m1".into()),
+        role: None,
+        attributable: chunk_attributable(Some("s2")),
+        delta: None,
+        name: None,
+        base: BaseEventFields::default(),
+    });
+    let events = collect(vec![
+        attributed_text_chunk(Some("m1"), "A", Some("s1")),
+        conflicting,
+    ])
+    .await;
+    assert_validation(
+        &events[events.len() - 1],
+        "does not match the open stream's subagent",
+    );
+}
+
+#[tokio::test]
+async fn closes_only_the_finishing_subagents_lane() {
+    // TS chunk-lanes.test.ts "closes only the finishing subagent's lane":
+    // s1's terminal closes s1's message before the terminal; s2 is untouched.
+    let close_event = factory::run_finished("t", "r");
+    let finished = Event::SubagentFinished(agui_rs_core::SubagentFinishedEvent {
+        subagent_run_id: "s1".into(),
+        result: None,
+        outcome: None,
+        base: BaseEventFields::default(),
+    });
+    let events = collect_ok(vec![
+        attributed_text_chunk(Some("m1"), "A", Some("s1")),
+        attributed_text_chunk(Some("m2"), "B", Some("s2")),
+        finished.clone(),
+        attributed_text_chunk(None, "C", Some("s2")),
+        close_event,
+    ])
+    .await;
+
+    let ends: Vec<_> = events
+        .iter()
+        .filter(|e| matches!(e, Event::TextMessageEnd(_)))
+        .collect();
+    assert_eq!(
+        ends,
+        vec![
+            &text_end_owned("m1", Some("s1")),
+            &text_end_owned("m2", Some("s2"))
+        ]
+    );
+    // s1's END lands before its terminal.
+    let end_pos = events
+        .iter()
+        .position(|e| matches!(e, Event::TextMessageEnd(_)));
+    let terminal_pos = events
+        .iter()
+        .position(|e| matches!(e, Event::SubagentFinished(_)));
+    assert!(end_pos.unwrap() < terminal_pos.unwrap());
+}
+
+#[tokio::test]
+async fn does_not_close_a_subagents_lane_on_an_untagged_own_lane_closer() {
+    // TS chunk-lanes.test.ts "does not close a subagent's lane on an untagged
+    // TOOL_CALL_RESULT / STEP_FINISHED": an untagged closer names the parent
+    // lane, so a subagent's stream survives it.
+    let close_event = factory::run_finished("t", "r");
+    let step = factory::step_finished("work");
+    let events = collect_ok(vec![
+        attributed_text_chunk(Some("m1"), "A", Some("s1")),
+        step,
+        attributed_text_chunk(None, "B", Some("s1")),
+        close_event,
+    ])
+    .await;
+
+    let contents: Vec<_> = events
+        .iter()
+        .filter(|e| matches!(e, Event::TextMessageContent(_)))
+        .collect();
+    assert_eq!(
+        contents,
+        vec![
+            &text_content_owned("m1", "A", Some("s1")),
+            &text_content_owned("m1", "B", Some("s1")),
+        ]
+    );
+    let ends = events
+        .iter()
+        .filter(|e| matches!(e, Event::TextMessageEnd(_)))
+        .count();
+    assert_eq!(ends, 1);
+}
+
+#[tokio::test]
+async fn closes_every_lane_at_run_finished_in_the_order_they_opened() {
+    // TS chunk-lanes.test.ts "closes every open lane at RUN_FINISHED, in the
+    // order they opened".
+    let close_event = factory::run_finished("t", "r");
+    let events = collect_ok(vec![
+        attributed_text_chunk(Some("m2"), "A", Some("s2")),
+        attributed_text_chunk(Some("p1"), "B", None),
+        attributed_text_chunk(Some("m1"), "C", Some("s1")),
+        close_event.clone(),
+    ])
+    .await;
+
+    let ends: Vec<_> = events
+        .iter()
+        .filter(|e| matches!(e, Event::TextMessageEnd(_)))
+        .collect();
+    assert_eq!(
+        ends,
+        vec![
+            &text_end_owned("m2", Some("s2")),
+            &text_end_owned("p1", None),
+            &text_end_owned("m1", Some("s1")),
+        ]
+    );
+    assert_eq!(*events.last().unwrap(), close_event);
+}
+
+#[tokio::test]
+async fn passes_through_subagent_lifecycle_events_untouched() {
+    // TS subagent-chunks.test.ts "pass through SUBAGENT_STARTED events
+    // unchanged" — and STARTED must not close any lane.
+    let started = Event::SubagentStarted(agui_rs_core::SubagentStartedEvent {
+        subagent_run_id: "s1".into(),
+        name: "research-agent".into(),
+        description: None,
+        parent_subagent_run_id: None,
+        parent_tool_call_id: None,
+        parent_message_id: None,
+        base: BaseEventFields::default(),
+    });
+    let close_event = factory::run_finished("t", "r");
+    let events = collect_ok(vec![
+        attributed_text_chunk(Some("m1"), "A", Some("s1")),
+        started.clone(),
+        attributed_text_chunk(None, "B", Some("s1")),
+        close_event,
+    ])
+    .await;
+
+    let contents: Vec<_> = events
+        .iter()
+        .filter(|e| matches!(e, Event::TextMessageContent(_)))
+        .collect();
+    assert_eq!(
+        contents,
+        vec![
+            &text_content_owned("m1", "A", Some("s1")),
+            &text_content_owned("m1", "B", Some("s1")),
+        ]
+    );
+    assert!(events.contains(&started));
 }

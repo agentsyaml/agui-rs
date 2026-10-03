@@ -220,57 +220,30 @@ Rust mapped-unit count ≥ TS count, inspected and left alone:
 
 Verified against the 1.0.0 checkout. Ordered by size.
 
-1. **Subagent lifecycle verification — 79 TS cases, 0 implemented.**
-   `client/src/verify/verify.ts` maintains `owners.{message,reasoning,toolCall,activity}`
-   keyed by `subagentRunId`, seeded from the `RUN_STARTED` input echo and
-   re-seeded by `MESSAGES_SNAPSHOT`. Rust `verify.rs:145-149` passes all three
-   `Subagent*` events through with a `ponytail:` comment. Every owner-mismatch
-   rejection in `subagent-verify.test.ts` is therefore absent. **This is a real
-   behavioural gap, not an architectural divergence** — unlike the two items
-   the previous revision of this document called out.
-2. **Subagent chunk lanes — 54 TS cases (`chunk-lanes` 39 + `subagent-chunks`
-   15), 0 implemented.** `chunks/transform.ts` reads `subagentRunId` 57 times;
-   `chunks.rs` reads it zero times. Concurrent subagents' interleaved chunks
-   are not routed to separate lanes and a chunk cannot close a *different*
-   subagent's pending message.
-3. **Enforcement does not recurse.** `enforce_event` strips unknown keys at the
-   event's own level only. Upstream `stripUnknown` descends into `messages`,
-   `tools` and the RFC 6902 `patch` array, so an unknown member nested one
-   level down is dropped upstream but **silently ignored by serde** here.
-   Declined at `enforce.rs:29-33`; a fix needs a general JSON Schema evaluator.
-4. **`REASONING_ENCRYPTED_VALUE` owner check absent in `verify`.** TS
-   `verify.ts:773+` resolves `entityId` against `owners.toolCall` (subtype
-   `tool-call`) or `owners.{message,reasoning}` (subtype `message`) and
-   rejects a value that disagrees with the opener. Rust `verify.rs` has no arm
-   for the event at all — it falls through to `_ => Ok(())` (`:150`).
-5. **Enforcement runs at a different pipeline position.** Upstream composes
+1. **Enforcement runs at a different pipeline position.** Upstream composes
    `enforceEvents(...)` **after** the middleware chain, before `transformChunks`
    (`agent.ts:368`, with the reasoning in the adjacent comment). Rust applies
    it inside `transform.rs::parse_sse_stream` / `parse_proto_stream` — the
    innermost wire layer, before any middleware can see a raw event. Same
    enforcement, different position; a middleware that expects to normalise a
    shape before validation cannot.
-6. **`mergeMetadata` not ported.** `core/src/metadata.ts` exports it and
+2. **`mergeMetadata` not ported.** `core/src/metadata.ts` exports it and
    `apply/default.ts:131` calls it on every event to merge `event.metadata`
    onto the target message. No Rust equivalent (`rg merge_metadata crates/` →
    nothing), so event-level metadata never reaches the message list.
-7. **Token-usage helpers not ported.** `tokenUsageFromAiSdkUsage`,
-   `tokenUsageFromLangChainMetadata` and `aggregateTokenUsage` are exported
-   from `@ag-ui/core` and tested across 29 TS cases. Rust only models the
-   `TokenUsage` *type*.
-8. **Activity-history projector scope.** `withAuthoritativeActivityTypes` (the
+3. **Activity-history projector scope.** `withAuthoritativeActivityTypes` (the
    scope union that stamps `@ag-ui/client` onto an unmarked transcript) is not
    ported; only the read side is.
-9. **Peer-ceiling defect detection.** Rust has the ceiling and the deprecation
+4. **Peer-ceiling defect detection.** Rust has the ceiling and the deprecation
    note but not the JS instance-field override diagnostic (5 TS cases,
    JS-runtime only).
-10. **Subscriber mutation model** — `stopPropagation` + `AgentStateMutation`
+5. **Subscriber mutation model** — `stopPropagation` + `AgentStateMutation`
     chaining. Rust hooks return `Result` / `Option<replacement>`. Registry,
     ordering, temporary subscribers and replacement chaining *are* implemented;
     only the JS mutation-object contract is intentionally not adopted.
-11. **`events$` replay subject / `detachActiveRun()`** — RxJS-specific; no
+6. **`events$` replay subject / `detachActiveRun()`** — RxJS-specific; no
     `futures::Stream` analogue. Cancellation is covered by `AbortHandle`.
-12. **Per-stream-stage `DebugLogger` logging** — `[VERIFY]`/`[SSE]`/
+7. **Per-stream-stage `DebugLogger` logging** — `[VERIFY]`/`[SSE]`/
     `[TRANSFORM]`/`[CHUNK]` console capture. Lifecycle logging
     (    `AgentConfig::debug`) is done; 39 `// SKIPPED:` markers across
     `chunks_transform_debug.rs` (10), `verify_debug.rs` (7),
@@ -278,11 +251,11 @@ Verified against the 1.0.0 checkout. Ordered by size.
     `agent_http.rs`, `agent_lifecycle.rs`, `agent_result.rs`,
     `agent_concurrent.rs`, `transform_http.rs`, `legacy_bridged.rs`
     (2 each) record it.
-13. **JS-runtime / zod-runtime-only cases** — frozen inputs, `process
+8. **JS-runtime / zod-runtime-only cases** — frozen inputs, `process
     undefined`, ESM interop, bundle-has-no-zod, two-zod-copies,
     zod-3.25 literals, and the 20-case SSE-vs-protobuf transport-parity
     differential.
-14. **The compatibility boundary's OUTBOUND half.** Upstream
+9. **The compatibility boundary's OUTBOUND half.** Upstream
     `CompatibilityBoundary.run` rewrites the `RunAgentInput` it is about to
     send (`compatibility-boundary.ts:177`, `input.messages =
     input.messages.map(upgradeMessageContent)`) and the module doc notes
@@ -293,7 +266,7 @@ Verified against the 1.0.0 checkout. Ordered by size.
     `Binary` variant, and the type stays a `Json` value in `RunAgentInput`,
     so the shape has to be hand-written JSON. The inbound direction — the one
     that killed a run outright — is implemented.
-15. **`normalizeLegacyRunAgentInput` for non-event request parsing.** Upstream
+10. **`normalizeLegacyRunAgentInput` for non-event request parsing.** Upstream
     marks it `@internal` and states the scope itself
     (`compatibility-boundary.ts:71-78`): *"Used internally for
     `RUN_STARTED.input`; direct server request parsers do not pass through this
@@ -306,6 +279,30 @@ Everything else is implemented. Each remaining item is recorded in
 `docs/typescript-alignment.md` §4 (intentional divergences) and, where a
 per-case stub exists, as `// SKIPPED:` markers in the Rust tests (48 markers
 total: 45 in `agui-rs-client`, 3 in `agui-rs-core`).
+
+## Closed since the first 1.0.0 pass
+
+1. **Subagent lifecycle verification** (`subagent-verify.test.ts`, 79 cases).
+   `verify.rs` now tracks `owners.{message,reasoning,toolCall}` per
+   `subagentRunId`, opens on `SUBAGENT_STARTED`, closes on
+   `SUBAGENT_FINISHED`/`SUBAGENT_ERROR`, retains closed ids so reopening under
+   the same subagent is legal, and rejects an owner-conflicting continuation
+   via `subagent_tag_error` (upstream `verify.ts:192-213`, `:476-492`,
+   `:717-730`). `RUN_FINISHED` closes over any span still open.
+2. **`REASONING_ENCRYPTED_VALUE` owner check** (upstream `verify.ts:772-800`).
+   Resolves `entityId` against `owners.toolCall` for subtype `tool-call`, and
+   `owners.message ?? owners.reasoning` for subtype `message`.
+3. **Subagent chunk lanes** (`chunk-lanes` 39 + `subagent-chunks` 15). `chunks.rs`
+   reads `attributable.subagent_run_id` on the receive, expand and compact
+   paths.
+4. **Enforcement recursion.** `enforce.rs` builds a `Shape` table from the
+   vendored `schema.json` and descends through objects, arrays, records and
+   discriminated unions, mirroring `strip.ts:101-249`, including pointer-shaped
+   warn paths and the drop-cascade-to-one-report rule of `:143-157`.
+5. **Token-usage helpers** (`core/src/token_usage.rs`). `token_usage_from_ai_sdk_usage`,
+   `token_usage_from_lang_chain_metadata` and `aggregate_token_usage`, with the
+   AG-UI-keyed warning text. These are SDK interop helpers rather than wire
+   schema, and Rust has no AI-SDK/LangChain caller for them — ported for parity.
 
 ## `[未核实]`
 
