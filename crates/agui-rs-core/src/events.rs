@@ -11,14 +11,31 @@ where
     Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
 }
 
+/// Serializer predicate for optional fields the schema forbids from being null
+/// (`BaseEvent.rawEvent`, `Metadata`, `RUN_FINISHED.result`,
+/// `SUBAGENT_FINISHED.result` — each carries `"not": { "type": "null" }`).
+/// `skip_serializing_if = "Option::is_none"` does not help here: a field that
+/// received JSON `null` deserializes to `Some(Value::Null)` and would re-emit
+/// `"field": null`. Upstream deletes the key at send time
+/// (`omitOptionalNulls`, generated/serialization.ts:439), so we match it.
+/// Deserialization keeps null as a value; a producer emitting one is wrong and
+/// gets dropped here rather than laundered into a present-but-invalid value.
+fn is_null_or_absent(value: &Option<Value>) -> bool {
+    value.as_ref().map(Value::is_null).unwrap_or(true)
+}
+
 /// `BaseEvent`: the fields every event carries, whatever its type.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct BaseEventFields {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub timestamp: Option<i64>,
-    #[serde(rename = "rawEvent", skip_serializing_if = "Option::is_none", default)]
+    #[serde(
+        rename = "rawEvent",
+        skip_serializing_if = "is_null_or_absent",
+        default
+    )]
     pub raw_event: Option<Value>,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[serde(skip_serializing_if = "is_null_or_absent", default)]
     pub metadata: Option<Value>,
 }
 
@@ -349,7 +366,7 @@ pub struct TokenUsage {
 pub struct RunFinishedEvent {
     pub thread_id: String,
     pub run_id: String,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[serde(skip_serializing_if = "is_null_or_absent", default)]
     pub result: Option<Value>,
     /// Absent means success.
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -577,7 +594,7 @@ pub struct SubagentStartedEvent {
 #[serde(rename_all = "camelCase")]
 pub struct SubagentFinishedEvent {
     pub subagent_run_id: String,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[serde(skip_serializing_if = "is_null_or_absent", default)]
     pub result: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub outcome: Option<SubagentFinishedOutcome>,
@@ -1109,6 +1126,55 @@ mod tests {
             messages: vec![user],
             base: BaseEventFields::default(),
         }));
+    }
+
+    #[test]
+    fn a_null_optional_value_serializes_as_an_omitted_key() {
+        // The schema forbids null on `rawEvent`, `metadata` (Metadata is "never
+        // null when present") and both `result` fields, and upstream deletes
+        // such keys at send time (`omitOptionalNulls`). A key that round-trips
+        // as `Some(Value::Null)` must therefore not re-emit `"key": null`.
+        let event = Event::RunFinished(RunFinishedEvent {
+            thread_id: "t1".into(),
+            run_id: "r1".into(),
+            result: Some(Value::Null),
+            outcome: None,
+            usage: Vec::new(),
+            base: BaseEventFields {
+                timestamp: Some(1),
+                raw_event: Some(Value::Null),
+                metadata: Some(Value::Null),
+            },
+        });
+        let json = serde_json::to_value(&event).unwrap();
+        assert!(json.get("result").is_none(), "{json}");
+        assert!(json.get("rawEvent").is_none(), "{json}");
+        assert!(json.get("metadata").is_none(), "{json}");
+
+        let subagent = Event::SubagentFinished(SubagentFinishedEvent {
+            subagent_run_id: "sub-1".into(),
+            result: Some(Value::Null),
+            outcome: None,
+            base: BaseEventFields::default(),
+        });
+        let json = serde_json::to_value(&subagent).unwrap();
+        assert!(json.get("result").is_none(), "{json}");
+    }
+
+    #[test]
+    fn an_inbound_json_null_becomes_absent_and_stays_omitted() {
+        // serde's `Option<Value>` maps JSON null to `None` by itself, so an
+        // inbound null is already absent; the `Some(Value::Null)` shape only
+        // arises from internal construction or the proto conversion
+        // (`Some(proto_to_json(..))`), which is what the serializer skips.
+        let event: Event = serde_json::from_value(json!({
+            "type": "RUN_FINISHED", "threadId": "t1", "runId": "r1", "result": null
+        }))
+        .expect("null result parses");
+        match &event {
+            Event::RunFinished(e) => assert_eq!(e.result, None),
+            other => panic!("expected RunFinished, got {other:?}"),
+        }
     }
 
     #[test]

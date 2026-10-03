@@ -16,8 +16,18 @@ pub const AGUI_METADATA_KEY: &str = "ag-ui";
 /// array or object under any key is replaced wholesale rather than blended.
 ///
 /// Event-level metadata is typed `Option<Value>` here while the schema types it
-/// as an object. A non-object therefore cannot be folded key-wise; it replaces
-/// the accumulator, which is the same last-write-wins outcome.
+/// as an object, so a non-object can arrive. Folding key-wise, upstream spreads
+/// it (`metadata.ts:63`, `{ ...existing, ...incoming }`): a non-object
+/// contributes no keys of its own, so
+///
+/// * a non-object `incoming` over an object `existing` changes nothing — it
+///   cannot replace anything key-wise (JS does not invent keys from a scalar),
+///   and
+/// * a non-object `existing` folds away to nothing and the result is
+///   `incoming`'s keys, or an empty object if both are non-objects.
+///
+/// Both spellings differ from "the non-object replaces the accumulator": only
+/// the key-wise outcome above matches the source.
 ///
 /// An absent `incoming` returns `existing` untouched; an empty object changes
 /// nothing.
@@ -35,7 +45,12 @@ pub fn merge_metadata(existing: Option<&Value>, incoming: Option<&Value>) -> Opt
             }
             Some(Value::Object(merged))
         }
-        _ => Some(incoming.clone()),
+        // A non-object spreads to no keys (`...7` in JS is empty), so which
+        // side is the object decides what survives.
+        (Some(existing @ Value::Object(_)), _) => Some(existing.clone()),
+        (_, incoming) => Some(Value::Object(
+            incoming.as_object().cloned().unwrap_or_default(),
+        )),
     }
 }
 
@@ -98,11 +113,29 @@ mod tests {
     }
 
     #[test]
-    fn a_non_object_replaces_the_accumulator() {
+    fn a_non_object_incoming_spreads_to_no_keys() {
+        // Upstream spreads (`{ ...existing, ...incoming }`), and a scalar
+        // contributes no keys, so the object survives untouched.
         let existing = obj(json!({"a": 1}));
         assert_eq!(
             merge_metadata(existing.as_ref(), Some(&json!(7))),
-            Some(json!(7))
+            Some(json!({"a": 1}))
+        );
+    }
+
+    #[test]
+    fn a_non_object_existing_folds_to_the_incoming_keys() {
+        assert_eq!(
+            merge_metadata(Some(&json!(7)), Some(&json!({"a": 1}))),
+            Some(json!({"a": 1}))
+        );
+    }
+
+    #[test]
+    fn two_non_objects_fold_to_an_empty_object() {
+        assert_eq!(
+            merge_metadata(Some(&json!(7)), Some(&json!(9))),
+            Some(json!({}))
         );
     }
 }

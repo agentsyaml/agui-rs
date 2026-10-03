@@ -44,6 +44,10 @@ struct Field {
     /// Upstream: the declared type. Ours: the normalised equivalent.
     type_name: String,
     repeated: bool,
+    /// proto3 explicit presence: both sides map it to `Option<T>`, so a side
+    /// flipping a field to or from `optional` changes the skip-if-none wire
+    /// behaviour and must fail here even though no type changed.
+    optional: bool,
 }
 
 type Fields = BTreeMap<String, Field>;
@@ -126,6 +130,9 @@ fn decl_start(text: &str, at: usize) -> usize {
 #[derive(Default)]
 struct ProtoFile {
     messages: BTreeMap<String, Fields>,
+    /// Top-level and nested enums, keyed by name. A nested enum lives in the
+    /// same map so `enum_values_match_upstream` sees it either way; proto
+    /// enum names are package-wide unique in these files.
     enums: BTreeMap<String, Fields>,
 }
 
@@ -145,10 +152,13 @@ fn parse_proto(raw: &str) -> ProtoFile {
                 out.enums.insert(name, parse_bare_values(body));
             }
             "message" => {
-                let (own, nested) = parse_proto_body(body);
+                let (own, nested, nested_enums) = parse_proto_body(body);
                 out.messages.insert(name.clone(), own);
                 for (nested_name, fields) in nested {
                     out.messages.entry(nested_name).or_insert(fields);
+                }
+                for (enum_name, fields) in nested_enums {
+                    out.enums.entry(enum_name).or_insert(fields);
                 }
             }
             _ => {}
@@ -157,15 +167,20 @@ fn parse_proto(raw: &str) -> ProtoFile {
     out
 }
 
-/// Fields of one message body, plus any nested message declared inside it.
-/// `oneof` arms belong to the enclosing message, so they are merged in; a nested
-/// `message` gets its own entry.
-fn parse_proto_body(body: &str) -> (Fields, BTreeMap<String, Fields>) {
+/// Fields of one message body, plus any nested `message` or `enum` declared
+/// inside it. `oneof` arms belong to the enclosing message, so they are merged
+/// in; a nested `message` gets its own fields entry and a nested `enum` its own
+/// enums entry. A nested enum that fell through to the field parser instead
+/// would be dropped wholesale (`NAME = N;` has no type), so a renamed or
+/// renumbered nested enum could drift unseen.
+fn parse_proto_body(body: &str) -> (Fields, BTreeMap<String, Fields>, BTreeMap<String, Fields>) {
     let mut own = Fields::new();
     let mut nested = BTreeMap::new();
-    // Nested `message` blocks carry their own fields, so they are removed before
-    // this body's own `;`-terminated statements are read -- otherwise a nested
-    // field declared before the outer ones lands in the wrong message.
+    let mut nested_enums = BTreeMap::new();
+    // Nested `message`/`enum` blocks carry their own entries, so they are
+    // removed before this body's own `;`-terminated statements are read --
+    // otherwise a nested field declared before the outer ones lands in the
+    // wrong message.
     let mut stripped = body.to_string();
     let mut removals: Vec<(usize, usize)> = Vec::new();
     let mut scan = 0usize;
@@ -179,11 +194,20 @@ fn parse_proto_body(body: &str) -> (Fields, BTreeMap<String, Fields>) {
         match keyword.as_str() {
             // A nested message keeps its own fields; drop the whole block.
             "message" => {
-                let (inner_fields, deeper) = parse_proto_body(inner);
+                let (inner_fields, deeper, deeper_enums) = parse_proto_body(inner);
                 nested.insert(name, inner_fields);
                 for (n, f) in deeper {
                     nested.entry(n).or_insert(f);
                 }
+                for (n, f) in deeper_enums {
+                    nested_enums.entry(n).or_insert(f);
+                }
+                removals.push((start, end));
+            }
+            // A nested enum is collected like a top-level one, then dropped
+            // from this body so its values do not read as fields.
+            "enum" => {
+                nested_enums.insert(name, parse_bare_values(inner));
                 removals.push((start, end));
             }
             // A oneof's arms belong to this message, so only the header goes.
@@ -197,7 +221,7 @@ fn parse_proto_body(body: &str) -> (Fields, BTreeMap<String, Fields>) {
     for f in parse_field_statements(&stripped) {
         own.insert(f.0, f.1);
     }
-    (own, nested)
+    (own, nested, nested_enums)
 }
 
 fn parse_bare_values(body: &str) -> Fields {
@@ -218,6 +242,7 @@ fn parse_bare_values(body: &str) -> Fields {
                     number,
                     type_name: String::new(),
                     repeated: false,
+                    optional: false,
                 },
             );
         }
@@ -257,7 +282,12 @@ fn parse_field(stmt: &str) -> Option<(String, Field)> {
         Some(rest) => (true, rest.trim()),
         None => (false, decl),
     };
-    let decl = decl.strip_prefix("optional").unwrap_or(decl).trim();
+    // `optional` must be tracked, not just peeled: proto3 explicit presence
+    // decides skip-if-none on the wire, so its loss is a real drift.
+    let (optional, decl) = match decl.strip_prefix("optional") {
+        Some(rest) => (true, rest.trim()),
+        None => (false, decl),
+    };
     let (ty, name) = decl.split_once(char::is_whitespace)?;
     let name = name.trim();
     if !is_ident(name) || !is_type_name(ty) {
@@ -269,6 +299,7 @@ fn parse_field(stmt: &str) -> Option<(String, Field)> {
             number,
             type_name: ty.to_string(),
             repeated,
+            optional,
         },
     ))
 }
@@ -449,6 +480,7 @@ fn parse_oneof_body(body: &str) -> Fields {
 fn field_from_attr(attr: &str, rust_ty: &str) -> Field {
     let number = attr_tag(attr).unwrap_or_else(|| panic!("no tag in attribute: {attr}"));
     let repeated = attr.contains("repeated");
+    let optional = attr.contains("optional");
     let type_name = if attr.contains("enumeration") {
         attr_quote_after(attr, "enumeration =").expect("enumeration target")
     } else if attr.contains("message") {
@@ -464,6 +496,10 @@ fn field_from_attr(attr: &str, rust_ty: &str) -> Field {
         number,
         type_name,
         repeated,
+        // A prost message field is always `Option<T>` — proto3 message presence
+        // is inherent — so the `optional` keyword there carries no information.
+        // Only scalar presence (`optional string`, `optional int64`) is real.
+        optional: optional && !attr.contains("message"),
     }
 }
 
@@ -519,6 +555,7 @@ fn parse_enum_body(body: &str) -> Fields {
                     number,
                     type_name: String::new(),
                     repeated: false,
+                    optional: false,
                 },
             );
         }
@@ -575,10 +612,30 @@ fn fold(name: &str) -> String {
 /// Field equality, with the type name put through the same alias table as the
 /// message names: our oneof arms point at `MediaInputPart` where upstream names
 /// four separate media messages.
+///
+/// The `optional` keyword is compared only for scalar fields. A prost message
+/// field is always `Option<T>` — proto3 message presence is inherent — so the
+/// keyword there carries no information on our side, while the .proto spells it
+/// on some message fields (`optional RunAgentInput input`) and not others.
+/// Holding both to the same spelling would flag every message field either way;
+/// scalar presence (`optional string`, `optional int64`) is the real signal,
+/// and that is what `same_field` guards.
 fn same_field(got: &Field, want: &Field) -> bool {
     got.number == want.number
         && got.repeated == want.repeated
+        && (got.optional == want.optional || !is_scalar(&got.type_name))
         && alias(&got.type_name) == alias(&want.type_name)
+}
+
+/// Types whose presence the `optional` keyword actually decides: primitives and
+/// enums. Anything else — declared messages and the google well-knowns, both
+/// spelled with a dot or a known alias — has inherent presence.
+fn is_scalar(type_name: &str) -> bool {
+    let known_scalars = [
+        "string", "bytes", "bool", "float", "double", "int32", "int64", "uint32", "uint64",
+        "sint32", "sint64", "fixed32", "fixed64", "sfixed32", "sfixed64",
+    ];
+    known_scalars.contains(&type_name)
 }
 
 fn fold_fields(fields: &Fields) -> BTreeMap<String, Field> {
@@ -603,10 +660,13 @@ fn our_view(schema: &SchemaFile, upstream_name: &str) -> Option<Fields> {
 fn the_parsers_see_the_whole_schema() {
     let upstream = merged_proto();
     assert_eq!(upstream.messages.len(), 53, "upstream message count");
+    // Top-level enums plus every nested one (`ToolCall.Function`-style nesting
+    // included): the count must see what `parse_proto_body` lifts out.
     assert_eq!(upstream.enums.len(), 2, "upstream enum count");
     let ours = parse_schema_rs();
-    assert!(
-        ours.messages.len() + ours.holder.len() >= 51,
+    assert_eq!(
+        ours.messages.len() + ours.holder.len(),
+        53,
         "our message count: {}",
         ours.messages.len() + ours.holder.len()
     );
@@ -680,9 +740,24 @@ fn the_shared_media_part_matches_every_upstream_media_message() {
         "VideoInputPart",
         "DocumentInputPart",
     ] {
+        // Presence on a message-typed field is inherent, so only scalar
+        // `optional` is comparable — same rule as `same_field`.
+        let normalise = |fields: Option<&Fields>| -> Option<Fields> {
+            fields.map(|fs| {
+                fs.iter()
+                    .map(|(k, v)| {
+                        let mut v = v.clone();
+                        if !is_scalar(&v.type_name) {
+                            v.optional = false;
+                        }
+                        (k.clone(), v)
+                    })
+                    .collect()
+            })
+        };
         assert_eq!(
-            ours.messages.get("MediaInputPart"),
-            upstream.messages.get(name),
+            normalise(ours.messages.get("MediaInputPart")),
+            normalise(upstream.messages.get(name)),
             "{name}"
         );
     }

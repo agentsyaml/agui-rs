@@ -328,6 +328,34 @@ fn token_usage_round_trips_through_int64() {
 }
 
 #[test]
+fn a_token_count_above_i64_range_decodes_as_absent() {
+    // `to_i64` silently maps an out-of-range `u64` to absent rather than
+    // wrapping. The wire field is `optional int64`, so anything past
+    // i64::MAX is not a value the wire type can carry; a token count that
+    // large is nonsense either way, and dropping it beats emitting a
+    // wrapped negative number a consumer would sum into its totals.
+    let event = Event::RunFinished(RunFinishedEvent {
+        thread_id: "t1".into(),
+        run_id: "r1".into(),
+        result: None,
+        outcome: None,
+        usage: vec![TokenUsage {
+            input_tokens: Some(u64::MAX),
+            ..TokenUsage::default()
+        }],
+        base: BaseEventFields::default(),
+    });
+    let decoded = round_trip(&event);
+    match &decoded {
+        Event::RunFinished(e) => {
+            assert_eq!(e.usage[0].input_tokens, None);
+            assert_eq!(e.usage[0].total_tokens, None);
+        }
+        other => panic!("expected RunFinished, got {other:?}"),
+    }
+}
+
+#[test]
 fn tool_call_result_round_trips_both_body_shapes() {
     let text = Event::ToolCallResult(ToolCallResultEvent {
         message_id: "m1".into(),
@@ -425,4 +453,33 @@ fn encoded_bytes_match_the_upstream_wire_layout() {
             0x1A, 0x02, b'r', b'1', // run_id = 3
         ]
     );
+}
+
+/// A patch op this build cannot name is a protocol error on decode, never an
+/// invented `"add"` that a state applier would apply. Upstream turns the same
+/// unknown enum value into a decimal spelling no applier accepts
+/// (proto.ts:1416-1420) and lets enforcement strip and report it — so the
+/// failure is loud, not a silently-applied fabrication.
+#[test]
+fn an_unknown_patch_op_is_a_protocol_error_on_decode() {
+    // Event.state_delta = 8, then StateDeltaEvent.delta = 2: one
+    // JsonPatchOperation (LEN) whose op = 1 carries the invalid value 7.
+    let bytes: Vec<u8> = vec![
+        0x42, 7, // Event.state_delta = 8, LEN 7
+        0x12, 5, // StateDeltaEvent.delta = 2, LEN 5
+        0x08, 0x07, // JsonPatchOperation.op = 1, varint 7
+        0x12, 0x01, b'/', // JsonPatchOperation.path = 2, "/"
+    ];
+    let err = agui_rs_proto::decode(&bytes).expect_err("op 7 has no name in this build");
+    assert!(
+        matches!(err, agui_rs_core::AgUiError::Protocol(_)),
+        "expected a protocol error, got {err:?}"
+    );
+}
+
+#[test]
+fn a_state_delta_with_a_known_op_still_decodes() {
+    // The error path above must not make ordinary patches fatal.
+    let event = factory::state_delta(vec![json!({"op": "add", "path": "/a", "value": "x"})]);
+    assert_eq!(round_trip(&event), event);
 }

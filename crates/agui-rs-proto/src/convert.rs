@@ -193,8 +193,9 @@ fn source_from_proto(source: Option<pb::InputContentSource>) -> PartSource {
             value: url.value,
             mime_type: url.mime_type,
         },
-        // ponytail: a `file` source with no payload is not representable in core,
-        // so it decodes to an empty url source rather than erroring the stream.
+        // ponytail: a `file` source carries its value/provider through as-is;
+        // upstream round-trips the same three members (proto.ts:183-187), so a
+        // file source decodes to a file source.
         Some(pb::input_content_source::Source::File(file)) => PartSource::File {
             value: file.value,
             provider: file.provider,
@@ -665,7 +666,12 @@ fn patch_op_to_proto(op: &serde_json::Value) -> Result<pb::JsonPatchOperation> {
     })
 }
 
-fn patch_op_from_proto(op: pb::JsonPatchOperation) -> serde_json::Value {
+fn patch_op_from_proto(op: pb::JsonPatchOperation) -> Result<serde_json::Value> {
+    // Asymmetric with the encoder only in direction, not strictness: an op this
+    // build cannot name is refused both ways. Upstream never fabricates one
+    // either — over the wire it becomes a decimal spelling that no JSON Patch
+    // applier accepts (proto.ts:1416-1420), and over SSE it is the
+    // unrecognised union member enforcement strips and reports.
     let op_str = match pb::JsonPatchOperationType::try_from(op.op) {
         Ok(pb::JsonPatchOperationType::Add) => "add",
         Ok(pb::JsonPatchOperationType::Remove) => "remove",
@@ -673,7 +679,12 @@ fn patch_op_from_proto(op: pb::JsonPatchOperation) -> serde_json::Value {
         Ok(pb::JsonPatchOperationType::Move) => "move",
         Ok(pb::JsonPatchOperationType::Copy) => "copy",
         Ok(pb::JsonPatchOperationType::Test) => "test",
-        Err(_) => "add",
+        Err(_) => {
+            return Err(AgUiError::protocol(format!(
+                "unknown JSON patch op {}",
+                op.op
+            )))
+        }
     };
     let mut map = serde_json::Map::new();
     map.insert("op".into(), serde_json::Value::String(op_str.into()));
@@ -684,7 +695,7 @@ fn patch_op_from_proto(op: pb::JsonPatchOperation) -> serde_json::Value {
     if let Some(value) = op.value {
         map.insert("value".into(), proto_to_json(&value));
     }
-    serde_json::Value::Object(map)
+    Ok(serde_json::Value::Object(map))
 }
 
 // ----- event dispatch -----
@@ -1057,7 +1068,11 @@ fn from_proto_event(event: pb::event::Event) -> Result<Event> {
             attributable: attributable_from_proto(ev.subagent_run_id),
         }),
         PE::StateDelta(ev) => Event::StateDelta(StateDeltaEvent {
-            delta: ev.delta.into_iter().map(patch_op_from_proto).collect(),
+            delta: ev
+                .delta
+                .into_iter()
+                .map(patch_op_from_proto)
+                .collect::<Result<Vec<_>>>()?,
             base: base_from_proto(ev.base_event),
             attributable: attributable_from_proto(ev.subagent_run_id),
         }),
@@ -1083,7 +1098,11 @@ fn from_proto_event(event: pb::event::Event) -> Result<Event> {
         PE::ActivityDelta(ev) => Event::ActivityDelta(ActivityDeltaEvent {
             message_id: ev.message_id,
             activity_type: ev.activity_type,
-            patch: ev.patch.into_iter().map(patch_op_from_proto).collect(),
+            patch: ev
+                .patch
+                .into_iter()
+                .map(patch_op_from_proto)
+                .collect::<Result<Vec<_>>>()?,
             base: base_from_proto(ev.base_event),
             attributable: attributable_from_proto(ev.subagent_run_id),
         }),
