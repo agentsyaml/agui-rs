@@ -124,6 +124,7 @@ pub struct NewToolCallContext<'a> {
     pub tool_call: &'a ToolCall,
 }
 
+#[allow(clippy::double_must_use)]
 #[async_trait]
 pub trait AgentSubscriber: Send + Sync {
     async fn on_run_initialized(&self, _ctx: &RunContext) {}
@@ -428,6 +429,7 @@ macro_rules! impl_composite_subscriber {
         unit: [ $( $uname:ident ( $($uarg:ident : $uty:ty),* ) ),* $(,)? ],
         try: [ $( $tname:ident ( $tctx:ty ) ),* $(,)? ],
     ) => {
+        #[allow(clippy::double_must_use)]
         #[async_trait]
         impl AgentSubscriber for CompositeSubscriber {
             $(
@@ -873,6 +875,7 @@ mod subscriber_tests {
 
     struct DefaultSubscriber;
 
+    #[allow(clippy::double_must_use)]
     #[async_trait]
     impl AgentSubscriber for DefaultSubscriber {}
 
@@ -891,6 +894,7 @@ mod subscriber_tests {
         }
     }
 
+    #[allow(clippy::double_must_use)]
     #[async_trait]
     impl AgentSubscriber for RecordingSubscriber {
         async fn on_run_started_event(
@@ -1301,6 +1305,7 @@ mod subscriber_tests {
     async fn custom_new_message_can_replace_message() {
         struct MutatingSubscriber;
 
+        #[allow(clippy::double_must_use)]
         #[async_trait]
         impl AgentSubscriber for MutatingSubscriber {
             async fn on_new_message(
@@ -1338,6 +1343,7 @@ mod subscriber_tests {
     async fn custom_new_tool_call_can_replace_tool_call() {
         struct MutatingSubscriber;
 
+        #[allow(clippy::double_must_use)]
         #[async_trait]
         impl AgentSubscriber for MutatingSubscriber {
             async fn on_new_tool_call(
@@ -1458,6 +1464,7 @@ mod subscriber_tests {
     async fn run_failed_event_can_return_error() {
         struct FailingSubscriber;
 
+        #[allow(clippy::double_must_use)]
         #[async_trait]
         impl AgentSubscriber for FailingSubscriber {
             async fn on_run_failed_event(
@@ -1488,6 +1495,7 @@ mod subscriber_tests {
     async fn interrupt_context_exposes_interrupts() {
         struct InterruptSubscriber;
 
+        #[allow(clippy::double_must_use)]
         #[async_trait]
         impl AgentSubscriber for InterruptSubscriber {
             async fn on_interrupt(

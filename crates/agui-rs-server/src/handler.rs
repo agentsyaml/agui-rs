@@ -33,6 +33,7 @@ impl From<&RunAgentInput> for RunContext {
     }
 }
 
+#[allow(clippy::double_must_use)]
 #[async_trait::async_trait]
 pub trait RunHandler: Send + Sync + 'static {
     /// Process the input and return a stream of AG-UI events.

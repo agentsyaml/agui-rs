@@ -38,6 +38,7 @@ impl From<RunAgentInput> for MiddlewareInput {
     }
 }
 
+#[allow(clippy::double_must_use)]
 #[async_trait]
 pub trait Middleware: Send + Sync {
     async fn run(
@@ -184,6 +185,7 @@ pub mod filter_tool_calls {
         }
     }
 
+    #[allow(clippy::double_must_use)]
     #[async_trait]
     impl Middleware for FilterToolCallsMiddleware {
         async fn run(
@@ -261,6 +263,7 @@ mod chain_tests {
         log: Arc<Mutex<Vec<String>>>,
     }
 
+    #[allow(clippy::double_must_use)]
     #[async_trait]
     impl Middleware for RecordingMiddleware {
         async fn run(
@@ -283,6 +286,7 @@ mod chain_tests {
 
     struct ShortCircuitMiddleware;
 
+    #[allow(clippy::double_must_use)]
     #[async_trait]
     impl Middleware for ShortCircuitMiddleware {
         async fn run(
@@ -299,6 +303,7 @@ mod chain_tests {
 
     struct ErrorMiddleware;
 
+    #[allow(clippy::double_must_use)]
     #[async_trait]
     impl Middleware for ErrorMiddleware {
         async fn run(

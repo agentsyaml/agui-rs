@@ -59,6 +59,7 @@ impl HttpAgent {
     }
 }
 
+#[allow(clippy::double_must_use)]
 #[async_trait]
 impl Agent for HttpAgent {
     async fn run(&self, input: RunAgentInput) -> Result<EventStream> {

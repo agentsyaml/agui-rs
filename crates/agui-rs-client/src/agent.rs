@@ -89,6 +89,7 @@ pub(crate) fn abortable_event_stream(mut stream: EventStream, abort: AbortHandle
     })
 }
 
+#[allow(clippy::double_must_use)]
 #[async_trait]
 pub trait Agent: Send + Sync {
     async fn run(&self, input: RunAgentInput) -> Result<EventStream>;
@@ -1277,6 +1278,7 @@ mod tests {
         events: Vec<Event>,
     }
 
+    #[allow(clippy::double_must_use)]
     #[async_trait]
     impl Agent for FakeAgent {
         async fn run(&self, _input: RunAgentInput) -> Result<BoxStream<'static, Result<Event>>> {
@@ -1290,6 +1292,7 @@ mod tests {
         invoked: Arc<Mutex<bool>>,
     }
 
+    #[allow(clippy::double_must_use)]
     #[async_trait]
     impl Middleware for PassthroughMiddleware {
         async fn run(
@@ -1304,6 +1307,7 @@ mod tests {
 
     struct ReplaceMessageSubscriber;
 
+    #[allow(clippy::double_must_use)]
     #[async_trait]
     impl AgentSubscriber for ReplaceMessageSubscriber {
         async fn on_new_message(
@@ -1324,6 +1328,7 @@ mod tests {
 
     struct ReplaceToolCallSubscriber;
 
+    #[allow(clippy::double_must_use)]
     #[async_trait]
     impl AgentSubscriber for ReplaceToolCallSubscriber {
         async fn on_new_tool_call(
@@ -1364,6 +1369,7 @@ mod tests {
         }
     }
 
+    #[allow(clippy::double_must_use)]
     #[async_trait]
     impl AgentSubscriber for TypedRecordingSubscriber {
         async fn on_event_received(
@@ -1500,6 +1506,7 @@ mod tests {
         failures: Arc<Mutex<Vec<String>>>,
     }
 
+    #[allow(clippy::double_must_use)]
     #[async_trait]
     impl AgentSubscriber for FailingTypedSubscriber {
         async fn on_state_snapshot(
